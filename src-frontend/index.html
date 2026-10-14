@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CreditFerry 积分摆渡</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif; background: #f5f6f8; color: #1f2329; }
+  .topbar { background: #ffffff; border-bottom: 1px solid #e5e7eb; padding: 14px 28px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
+  .logo { width: 34px; height: 34px; border-radius: 8px; }
+  .topbar h1 { font-size: 17px; font-weight: 700; }
+  .topbar .sub { font-size: 12px; color: #6b7280; }
+  .pill { margin-left: auto; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 999px; }
+  .pill.on { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .pill.off { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 24px 60px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 920px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 18px 20px; }
+  .card h2 { font-size: 15px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card .desc { font-size: 12px; color: #6b7280; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button { font-family: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 7px; border: 1px solid #d1d5db; background: #ffffff; color: #1f2329; cursor: pointer; }
+  button:hover { background: #f9fafb; }
+  button.primary { background: #2563eb; border-color: #2563eb; color: #ffffff; }
+  button.primary:hover { background: #1d4ed8; }
+  button.danger { color: #b91c1c; border-color: #fecaca; }
+  button.small { padding: 4px 10px; font-size: 12px; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input[type=text] { font-family: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 7px; width: 100%; }
+  .stat { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 12px; }
+  .stat b { font-size: 16px; color: #0f172a; }
+  .stat span { color: #6b7280; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 10px; }
+  th { text-align: left; padding: 7px 8px; background: #eff6ff; color: #1e40af; border: 1px solid #dbeafe; white-space: nowrap; }
+  td { padding: 6px 8px; border: 1px solid #e5e7eb; }
+  tr:nth-child(even) td { background: #fafafa; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .badge.loomy { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .badge.raccoon { background: #fdf4ff; color: #a21caf; border: 1px solid #f5d0fe; }
+  .badge.opencode { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .badge.maodao { background: #fff1f0; color: #cf1322; border: 1px solid #ffccc7; }
+  .badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .badge.no { background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb; }
+  .badge.free { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .badge.promo { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+  .muted { color: #6b7280; font-size: 12px; }
+  .qr-box { display: flex; gap: 18px; align-items: flex-start; margin-top: 10px; }
+  .qr-box .qr { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 8px; line-height: 0; }
+  .qr-box .qr svg { width: 220px; height: 220px; }
+  pre { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 12px 14px; font-size: 12px; overflow-x: auto; margin-top: 8px; max-height: 260px; }
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #0f172a; color: #f8fafc; font-size: 13px; padding: 10px 18px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; max-width: 70vw; }
+  .toast.show { opacity: .95; }
+  .tabs { display: flex; gap: 6px; margin-top: 10px; }
+  .tabs button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .section-title { font-size: 15px; font-weight: 700; margin: 26px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .endpoint { font-family: Consolas, monospace; font-size: 12px; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 2px 8px; border-radius: 5px; }
+  .footer { margin-top: 34px; padding: 14px 18px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; font-size: 12px; color: #92400e; line-height: 1.7; }
+  .session-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid #e5e7eb; border-radius: 8px; margin-top: 6px; font-size: 12.5px; }
+  .session-item .meta { color: #6b7280; font-size: 11.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.green { background: #10b981; } .dot.amber { background: #f59e0b; } .dot.gray { background: #9ca3af; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <img class="logo" src="./icon.png" alt="">
+  <div>
+    <h1>CreditFerry 积分摆渡</h1>
+    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 → 本机 OpenAI 兼容口</div>
+  </div>
+  <span id="server-pill" class="pill off">服务未启动</span>
+</div>
+
+<div class="wrap">
+  <div class="grid">
+    <!-- Loomy -->
+    <div class="card">
+      <h2><span class="badge loomy">Loomy</span> 讯飞 Loomy（积分模型）</h2>
+      <div class="desc">默认走桌面客户端登录态（只读扫描 <span class="endpoint">C:\Users\Public\Loomy\*\userData\auth-session.json</span>），也可手动粘贴会话。会话有效期 14 天。</div>
+      <div class="row">
+        <button class="primary" id="btn-loomy-import">扫描本机客户端</button>
+        <button id="btn-loomy-refresh">刷新模型与余额</button>
+        <button id="btn-loomy-probe">验证可调用性</button>
+        <span class="stat"><b id="loomy-balance">—</b><span>积分余额</span></span>
+        <span class="stat"><b id="loomy-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="loomy-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="loomy-sessions"></div>
+      <details style="margin-top:10px">
+        <summary class="muted" style="cursor:pointer">手动粘贴会话 token</summary>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="loomy-manual" placeholder="粘贴 Loomy session token">
+          <button id="btn-loomy-manual">校验并保存</button>
+        </div>
+      </details>
+    </div>
+
+    <!-- Raccoon -->
+    <div class="card">
+      <h2><span class="badge raccoon">小浣熊</span> 商汤小浣熊（积分模型）</h2>
+      <div class="desc">微信扫码登录 xiaohuanxiong.com 网关，独立账号、独立积分（免费版每日赠送、升级版按订阅发放）。</div>
+      <div class="row">
+        <button class="primary" id="btn-raccoon-qr">微信扫码登录</button>
+        <button id="btn-raccoon-refresh">刷新模型与余额</button>
+        <button id="btn-raccoon-probe">验证可调用性</button>
+        <button class="danger" id="btn-raccoon-logout">退出登录</button>
+        <span class="stat"><b id="raccoon-balance">—</b><span>积分余额</span></span>
+        <span class="stat"><b id="raccoon-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="raccoon-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="raccoon-status" class="muted" style="margin-top:8px"></div>
+      <div id="raccoon-qr" class="qr-box hidden">
+        <div class="qr" id="qr-svg"></div>
+        <div style="font-size:12.5px;line-height:1.8">
+          <div><b>微信扫码 → 确认登录</b></div>
+          <div class="muted">或在手机打开：</div>
+          <div><a id="qr-url" href="#" target="_blank" rel="noopener" class="endpoint">—</a></div>
+          <div class="muted" id="qr-hint" style="margin-top:6px">等待扫码…（约 2 秒刷新一次状态）</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OpenCode -->
+    <div class="card">
+      <h2><span class="badge opencode">OpenCode</span> OpenCode 免费模型池</h2>
+      <div class="desc">数据目录里的隔离 OpenCode 运行时（自动下载、独立 XDG、随机口令），按价格筛出免费模型，经信封协议翻译成 OpenAI 兼容调用。本机动作一律自动拒绝。</div>
+      <div class="row">
+        <button class="primary" id="btn-oc-start">启动运行时</button>
+        <button id="btn-oc-stop">停止</button>
+        <button id="btn-oc-refresh">刷新模型</button>
+        <button id="btn-oc-probe">验证可调用性</button>
+        <span class="stat"><b id="oc-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="oc-version">—</b><span>版本</span></span>
+        <span class="stat"><b id="oc-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="oc-status" class="muted" style="margin-top:8px">未启动 — 首次启动会自动下载 OpenCode 二进制（约一两分钟）</div>
+    </div>
+
+    <!-- Maodao -->
+    <div class="card">
+      <h2><span class="badge maodao">码道</span> 华为码道 CodeArts Doer（benefit 模型）</h2>
+      <div class="desc">浏览器 OAuth 登录华为门户（与桌面客户端同款 PKCE＋DPoP 流程），或从本机 <span class="endpoint">%APPDATA%\codearts</span> 客户端导入会话。刷新令牌单次使用、与登录密钥对绑定——同一会话不能同时被客户端和本工具轮换，登录后请优先用面板这份。</div>
+      <div class="row">
+        <button class="primary" id="btn-maodao-login">浏览器登录</button>
+        <button id="btn-maodao-import">从客户端导入</button>
+        <button id="btn-maodao-refresh">刷新模型与余额</button>
+        <button id="btn-maodao-probe">验证可调用性</button>
+        <button class="danger" id="btn-maodao-logout">退出登录</button>
+        <span class="stat"><b id="maodao-balance">—</b><span>token 余额</span></span>
+        <span class="stat"><b id="maodao-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="maodao-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="maodao-status" class="muted" style="margin-top:8px"></div>
+      <div id="maodao-login-hint" class="muted hidden" style="margin-top:6px">已打开浏览器，请在华为登录页完成授权（约 5 分钟内有效）…</div>
+    </div>
+  </div>
+
+  <div class="section-title">已发布模型（<span id="model-count">0</span>）<span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用</span></div>
+  <div class="card">
+    <table id="models-table">
+      <thead><tr>
+        <th>客户端可见 ID</th><th>来源</th><th>工具</th><th>图片</th><th>上下文</th><th>输出上限</th><th>积分倍率</th><th>计费</th><th>可调用</th>
+      </tr></thead>
+      <tbody><tr><td colspan="9" class="muted">暂无模型 — 请先登录上游并刷新</td></tr></tbody>
+    </table>
+    <div class="muted" style="margin-top:8px">倍率为 Loomy / 小浣熊的积分消耗系数；OpenCode 免费池不扣积分（<b>—</b>）。「可调用」列由验证探针实时测定（每次消耗极少量积分）；验证失败的模型不会提供给客户端，也不会写入导出配置。</div>
+  </div>
+
+  <div class="section-title">积分账本</div>
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <span class="stat"><b id="ledger-loomy">—</b><span>Loomy 余额</span></span>
+      <span class="stat"><b id="ledger-raccoon">—</b><span>小浣熊余额</span></span>
+      <span class="stat"><b id="ledger-maodao">—</b><span>码道 token 余额</span></span>
+      <span class="muted">Loomy 每次请求在 usage 里带回 <b>points_consumed</b>（真实扣分）；小浣熊网关不回传单次积分，此处仅记录 token 与余额快照。</span>
+    </div>
+    <table id="ledger-table">
+      <thead><tr><th>时间</th><th>来源</th><th>模型</th><th>积分</th><th>tokens (提示/补全)</th><th>类型</th></tr></thead>
+      <tbody><tr><td colspan="6" class="muted">暂无记录</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section-title">导出到客户端</div>
+  <div class="card">
+    <div class="row">
+      <button class="primary" id="btn-export-wb">写入 WorkBuddy models.json</button>
+      <button id="btn-clean-wb">摘除条目</button>
+      <span class="muted">入口密钥：<span class="endpoint" id="api-key-view">—</span></span>
+      <button class="small" id="btn-copy-key">复制</button>
+    </div>
+    <div id="wb-result" class="muted" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btn-export-wb-intl">写入 WorkBuddy 国际版（~/.workbuddy-ai）</button>
+      <button id="btn-clean-wb-intl">摘除条目</button>
+    </div>
+    <div id="wb-intl-result" class="muted" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btn-export-qoder">写入 Qoder CN（~/.qoder-cn）</button>
+      <button id="btn-clean-qoder">摘除条目</button>
+    </div>
+    <div id="qoder-result" class="muted" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btn-export-qoder-intl">写入 Qoder 国际版（~/.qoder）</button>
+      <button id="btn-clean-qoder-intl">摘除条目</button>
+    </div>
+    <div id="qoder-intl-result" class="muted" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btn-export-dsh">一键配置 DeepSeek Harness（~/.dsh）</button>
+      <button id="btn-clean-dsh">移除配置</button>
+    </div>
+    <div id="dsh-result" class="muted" style="margin-top:6px"></div>
+    <div class="muted" style="margin-top:8px">四个客户端格式各异：WorkBuddy 写 models.json 条目（CN 版 ~/.workbuddy、国际版 ~/.workbuddy-ai）；Qoder（CN/国际版）在 settings.json 的 providers 下写入一个 openai-compatible 提供方；DeepSeek Harness 在 cordis.patch.yml 的 providers 段注入 CreditFerry 提供方并把密钥写进 .credentials.yaml 的 refs。均带归属标记/成对块标记，只增删本工具自己的条目，你手写的配置不动；退出托盘菜单会一并摘除。</div>
+    <div class="muted" style="margin-top:4px">只写入通过「验证可调用性」的模型；验证失败的（如图片模型、暂未开放）会被跳过并在模型表中标注原因。</div>
+  </div>
+
+  <div class="footer">
+    <b>诚实交代</b><br>
+    ① 本工具调用你在 Loomy / 小浣熊 上的积分额度，请遵守对应平台的服务条款；积分权益由上游发放与回收，本工具不做任何代领、代扣或破解。<br>
+    ② 所有凭据（会话、令牌）仅存本机数据目录（%APPDATA%\CreditFerry），不明文外传；转发口只听 127.0.0.1，浏览器来源一律拒绝。<br>
+    ③ 退出本工具会把自己写入 WorkBuddy models.json 的条目摘除（你手写的配置不动）；小浣熊的扫码令牌轮换后会自动续期，失败需重新扫码。<br>
+    ④ 「不可用」只代表当时没通过上游校验；积分余额以各平台客户端显示为准。<br>
+    ⑤ 平台追加/刷新后会自动逐个验证模型可调用性（Loomy / 小浣熊每次验证消耗极少量积分，OpenCode 免费池不消耗）；验证失败的模型不会提供给客户端。
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="./app.js"></script>
+</body>
+</html>

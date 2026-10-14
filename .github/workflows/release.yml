@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # allow a manual run from Actions UI (no tag needed); publish only happens on tags
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: CreditFerry
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x86_64
+          - os: macos-latest        # Apple Silicon -> universal-capable aarch64
+            arch: aarch64
+          - os: macos-13            # Intel Mac
+            arch: x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # NSIS is required to build the Windows .exe installer (targets: all -> msi + nsis)
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y nsis
+
+      # create-dmg is required to build the macOS .dmg
+      - name: Install create-dmg (macOS)
+        if: runner.os == 'macOS'
+        run: npm install -g create-dmg
+
+      - name: Build with Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectId: src-tauri
+          updater: false
+
+      - name: Collect installer artifacts
+        run: |
+          set -e
+          BUNDLE=src-tauri/target/release/bundle
+          OUT=dist
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          echo "=== bundle dir ==="; ls -R "$BUNDLE" 2>/dev/null | head -40
+          # Windows installers: NSIS .exe + MSI
+          find "$BUNDLE" -type f \( -name "*.msi" -o -name "*.dmg" \) -exec cp -f {} "$OUT/" \; 2>/dev/null || true
+          find "$BUNDLE" -type f -name "*.exe"  -exec cp -f {} "$OUT/" \; 2>/dev/null || true
+          # macOS: the .app is a directory -> ship it as a tarball next to the .dmg
+          if [ -d "$BUNDLE/macos" ]; then
+            ( cd "$BUNDLE/macos"
+              APP=$(ls -d ./*.app 2>/dev/null | head -1)
+              if [ -n "$APP" ]; then
+                tar -czf "$OUT/${{ env.APP_NAME }}-${{ matrix.arch }}.app.tar.gz" "$(basename "$APP")"
+              fi )
+          fi
+          echo "=== final $OUT ==="; ls -l "$OUT"
+
+      - name: Upload per-OS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: warn
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Flatten nested artifact folders
+        run: |
+          cd dist
+          for d in */; do
+            [ -d "$d" ] && mv -f "$d"* . 2>/dev/null || true
+          done
+          echo "=== release files ==="; find . -type f | sort
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.msi
+            dist/*.exe
+            dist/*.dmg
+            dist/*.tar.gz

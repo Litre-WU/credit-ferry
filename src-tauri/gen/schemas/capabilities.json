@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"CreditFerry default capability set","local":true,"windows":["main"],"permissions":["core:default","core:window:default","core:webview:default","core:app:default","core:event:default","core:tray:default","core:menu:default"]}}

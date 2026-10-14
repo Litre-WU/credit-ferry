@@ -1,0 +1,31 @@
+# --- build artifacts / large dirs ---
+target/
+src-tauri/target/
+node_modules/
+dist/
+build/
+
+# --- runtime state & logs (keep out of VCS) ---
+*.log
+run.log
+build.log
+
+# --- python scratch / caches ---
+__pycache__/
+*.pyc
+.maodao-dpop/
+
+# --- SECRETS: Maodao DPoP P-256 private key (kty=EC, "d" field). NEVER commit. ---
+maodao-dpop.json
+
+# --- icon working files: keep the final set, exclude scratch previews/backups ---
+src-tauri/icons/_preview_*.png
+src-tauri/icons/_master_*.png
+src-tauri/icons/_icons_backup/
+src-tauri/icons/_icons_backup2/
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db
+
+# NOTE: Cargo.lock is intentionally TRACKED (reproducible CI builds).
