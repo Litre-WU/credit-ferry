@@ -1,91 +1,56 @@
-"""Generate CreditFerry icon: red sailboats sailing from lower left to upper
-right, shrinking as they go. Draws a 4096 master, rescales to every existing
-icon file's exact size, and rebuilds icon.ico (multi-size) + icon.icns + the
-panel header logo.
+"""Generate CreditFerry icon: one red origami paper boat on a transparent
+canvas. Draws a 4096 master, rescales to every existing icon file's exact size,
+and rebuilds icon.ico (multi-size) + icon.icns + the panel header logo.
 """
-import glob, os
+import glob, io, os, struct
 from PIL import Image, ImageDraw
 
 W = 4096
-cx = W // 2
 
-# palette — cool water background, warm red sails and hulls
-TOP = (206, 240, 249)     # light aqua
-BOT = (126, 196, 226)     # water blue
-SAIL_L = (236, 100, 82)   # main sail (light)
-SAIL_R = (199, 54, 46)    # jib (shadow side)
+# palette — the folded-paper reds of the reference shot
+PEAK_L = (236, 102, 80)   # the broad near face of the peak
+PEAK_R = (205, 65, 53)    # the far face, turned away from the light
 HULL = (226, 84, 68)      # main red
-HULL_D = (178, 46, 40)    # hull bottom shade
-CREAM = (255, 248, 238)   # face
-CHEEK = (255, 176, 156)
-WAVE = (255, 255, 255)
+HULL_D = (170, 44, 39)    # shaded underside
+RIM = (252, 158, 136)     # the folded top edge catching the light
 
-# ---- gradient rounded-square background (water) ----
-px_img = Image.new("RGBA", (W, W))
-px = px_img.load()
-for y in range(W):
-    t = y / (W - 1)
-    r = int(TOP[0] + (BOT[0] - TOP[0]) * t)
-    g = int(TOP[1] + (BOT[1] - TOP[1]) * t)
-    b = int(TOP[2] + (BOT[2] - TOP[2]) * t)
-    for x in range(W):
-        px[x, y] = (r, g, b, 255)
-mask = Image.new("L", (W, W), 0)
-md = ImageDraw.Draw(mask)
-md.rounded_rectangle([0, 0, W - 1, W - 1], radius=int(W * 0.22), fill=255)
-px_img.putalpha(mask)
-img = px_img.convert("RGBA")
 
-# ---- one red sailboat, drawn in a 1000x1000 unit box and scaled on demand ----
-def sailboat(size: int, with_face: bool) -> Image.Image:
+def paper_boat(size: int) -> Image.Image:
+    """A classic origami boat, drawn in a 1000x1000 unit box and scaled.
+
+    The right wing rides higher than the left one, so the boat reads as heading
+    for the upper-right corner with no rotation applied.
+    """
     lay = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     ld = ImageDraw.Draw(lay)
     u = size / 1000.0
     P = lambda pts: [(x * u, y * u) for x, y in pts]
-    B = lambda box: [c * u for pt in box for c in pt]
     lw = lambda n: max(2, int(n * u))
 
-    # hull with a darker band at the waterline and a folded rim
-    ld.polygon(P([(150, 700), (850, 700), (730, 845), (270, 845)]), fill=HULL)
-    ld.polygon(P([(205, 785), (795, 785), (730, 845), (270, 845)]), fill=HULL_D)
-    ld.line(P([(150, 700), (850, 700)]), fill=(255, 158, 138), width=lw(10))
-    # mast
-    ld.line(P([(500, 690), (500, 135)]), fill=HULL_D, width=lw(15))
-    # main sail (light, bellied leech) and the shaded jib behind the mast
-    ld.polygon(P([(522, 165), (792, 430), (882, 690), (522, 690)]), fill=SAIL_L)
-    ld.polygon(P([(478, 250), (478, 668), (268, 668)]), fill=SAIL_R)
+    apex, crease_foot = (470, 150), (492, 645)
+    # the peak: two faces split by the fold
+    ld.polygon(P([apex, (296, 645), crease_foot]), fill=PEAK_L)
+    ld.polygon(P([apex, crease_foot, (706, 622)]), fill=PEAK_R)
+    ld.line(P([apex, crease_foot]), fill=HULL_D, width=lw(5))
 
-    if with_face:
-        ld.ellipse(B([(558, 468), (640, 550)]), fill=CREAM)
-        ld.ellipse(B([(692, 468), (774, 550)]), fill=CREAM)
-        ld.arc(B([(582, 545), (758, 662)]), start=20, end=160, fill=CREAM, width=lw(22))
-        ld.ellipse(B([(528, 592), (600, 652)]), fill=CHEEK + (140,))
-        ld.ellipse(B([(752, 592), (824, 652)]), fill=CHEEK + (140,))
+    # hull, drawn over the foot of the peak so the sail grows out of the deck
+    ld.polygon(P([(78, 604), (922, 494), (744, 792), (256, 814)]), fill=HULL)
+    ld.polygon(P([(218, 750), (790, 730), (744, 792), (256, 814)]), fill=HULL_D)
+    ld.line(P([(78, 604), (922, 494)]), fill=RIM, width=lw(11))
     return lay
 
 
-def wake_stroke(x0, x1, y, h, alpha):
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([int(W * x0), int(W * y), int(W * x1), int(W * (y + h))],
-                        radius=int(W * h / 2), fill=WAVE + (alpha,))
-
-
-# ---- fleet: big at the lower left, shrinking toward the upper right ----
-TILT = 7  # degrees clockwise, so the boats heel into their course
-for fx, fy, size, face in ((0.790, 0.352, 430, False),
-                           (0.600, 0.487, 820, False),
-                           (0.315, 0.672, 1850, True)):
-    wake_stroke(fx - size / W * 0.30, fx + size / W * 0.32, fy + size / W * 0.40,
-                size / W * 0.035, 150 if size > 1000 else 105)
-    boat = sailboat(size, face).rotate(-TILT, resample=Image.BICUBIC, expand=True)
-    img.alpha_composite(boat, (int(W * fx) - boat.width // 2, int(W * fy) - boat.height // 2))
-
+img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+boat = paper_boat(3600)
+img.alpha_composite(boat, ((W - boat.width) // 2, (W - boat.height) // 2))
 master = img
 
 ic_dir = os.path.dirname(os.path.abspath(__file__)) + "/src-tauri/icons"
 
+
 def save_size(path, size):
     master.resize((size, size), Image.LANCZOS).save(path)
+
 
 pngs = sorted(glob.glob(ic_dir + "/*.png"))
 for f in pngs:
@@ -97,15 +62,12 @@ for sub in ("android", "ios"):
 # ---- icon.ico (multi-size, PNG-compressed frames) ----
 # PIL's append= is unreliable (often emits a single frame), so build the
 # ICO container by hand: header + directory + one PNG blob per size.
-import struct
-import io
 ico_path = os.path.join(ic_dir, "icon.ico")
 sizes = [16, 24, 32, 48, 64, 128, 256]
-src = Image.open(os.path.join(ic_dir, "icon-256.png")).convert("RGBA")
 blobs = []
 for s in sizes:
     buf = io.BytesIO()
-    src.resize((s, s), Image.LANCZOS).save(buf, format="PNG")
+    master.resize((s, s), Image.LANCZOS).save(buf, format="PNG")
     blobs.append(buf.getvalue())
 out = io.BytesIO()
 out.write(struct.pack("<HHH", 0, 1, len(blobs)))
@@ -121,22 +83,18 @@ for blob in blobs:
 with open(ico_path, "wb") as fh:
     fh.write(out.getvalue())
 
-# ---- icon.icns (macOS) ----
+# ---- icon.icns (macOS) — alpha has to survive, so no RGB conversion ----
 icns_path = os.path.join(ic_dir, "icon.icns")
 try:
-    master.convert("RGB").save(icns_path, format="ICNS")
+    master.save(icns_path, format="ICNS")
     print("icns ok")
 except Exception as e:
     print("icns skipped:", e)
 
-# ---- preview / reference copies ----
-def down(master, size):
-    return master.resize((size, size), Image.LANCZOS).convert("RGB")
-
-down(master, 2048).save(ic_dir + "/_master_2048.png")
-down(master, 512).save(ic_dir + "/_preview_512.png")
-down(master, 128).save(ic_dir + "/_preview_128.png")
-down(master, 32).save(ic_dir + "/_preview_32.png")
+# ---- preview copies, left RGBA so the transparency is visible ----
+for size in (2048, 512, 128, 32):
+    name = "_master_2048.png" if size == 2048 else "_preview_%d.png" % size
+    master.resize((size, size), Image.LANCZOS).save(os.path.join(ic_dir, name))
 
 # ---- the panel header logo lives outside src-tauri/icons ----
 root = os.path.dirname(os.path.abspath(__file__))
