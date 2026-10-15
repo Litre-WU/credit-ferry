@@ -42,6 +42,17 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # `npm run tauri build` is what tauri-action invokes, so the CLI declared
+      # in devDependencies has to be installed first.
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
       # NSIS is required to build the Windows .exe installer (targets: all -> msi + nsis)
       - name: Install NSIS (Windows)
         if: runner.os == 'Windows'
@@ -57,8 +68,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectId: src-tauri
-          updater: false
+          projectPath: src-tauri
+          includeDebug: false
+          includeRelease: true
+          includeUpdaterJson: false
 
       - name: Collect installer artifacts
         run: |
