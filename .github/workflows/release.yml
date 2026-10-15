@@ -21,10 +21,18 @@ jobs:
         include:
           - os: windows-latest
             arch: x86_64
-          - os: macos-latest        # Apple Silicon -> universal-capable aarch64
+            bundleDir: src-tauri/target/release/bundle
+          # Apple Silicon, native host build.
+          - os: macos-latest
             arch: aarch64
-          - os: macos-13            # Intel Mac
+            bundleDir: src-tauri/target/release/bundle
+          # Intel: macos-13 runners sit queued indefinitely, so cross-compile
+          # the x86_64 target on an Apple Silicon runner instead.
+          - os: macos-latest
             arch: x86_64
+            rustTarget: x86_64-apple-darwin
+            tauriArgs: --target x86_64-apple-darwin
+            bundleDir: src-tauri/target/x86_64-apple-darwin/release/bundle
 
     runs-on: ${{ matrix.os }}
 
@@ -36,6 +44,10 @@ jobs:
 
       - name: Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Add cross-compile target
+        if: matrix.rustTarget
+        run: rustup target add ${{ matrix.rustTarget }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -72,12 +84,14 @@ jobs:
           includeDebug: false
           includeRelease: true
           includeUpdaterJson: false
+          args: ${{ matrix.tauriArgs }}
 
       - name: Collect installer artifacts
         run: |
           set -e
-          BUNDLE=src-tauri/target/release/bundle
-          OUT=dist
+          BUNDLE=${{ matrix.bundleDir }}
+          # Absolute: the macOS branch below cd's into the bundle dir.
+          OUT="$GITHUB_WORKSPACE/dist"
           rm -rf "$OUT"; mkdir -p "$OUT"
           echo "=== bundle dir ==="; ls -R "$BUNDLE" 2>/dev/null | head -40
           # Windows installers: NSIS .exe + MSI
@@ -85,18 +99,18 @@ jobs:
           find "$BUNDLE" -type f -name "*.exe"  -exec cp -f {} "$OUT/" \; 2>/dev/null || true
           # macOS: the .app is a directory -> ship it as a tarball next to the .dmg
           if [ -d "$BUNDLE/macos" ]; then
-            ( cd "$BUNDLE/macos"
-              APP=$(ls -d ./*.app 2>/dev/null | head -1)
-              if [ -n "$APP" ]; then
-                tar -czf "$OUT/${{ env.APP_NAME }}-${{ matrix.arch }}.app.tar.gz" "$(basename "$APP")"
-              fi )
+            APP=$(ls -d "$BUNDLE"/macos/*.app 2>/dev/null | head -1)
+            if [ -n "$APP" ]; then
+              ( cd "$(dirname "$APP")" && tar -czf "$OUT/${APP_NAME}-${{ matrix.arch }}.app.tar.gz" "$(basename "$APP")" )
+            fi
           fi
           echo "=== final $OUT ==="; ls -l "$OUT"
 
       - name: Upload per-OS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-${{ matrix.arch }}
+          # runner.os keeps Windows-x86_64 and macOS-x86_64 artifact names distinct
+          name: ${{ env.APP_NAME }}-${{ runner.os }}-${{ matrix.arch }}
           path: dist/
           if-no-files-found: warn
 
