@@ -1,12 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "CreditFerry",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "identifier": "local.credit.ferry",
   "build": {
-    "frontendDist": "../src-frontend",
-    "devUrl": "http://localhost:5190",
-    "beforeDevCommand": ""
+    "frontendDist": "../src-frontend"
   },
   "app": {
     "security": {
