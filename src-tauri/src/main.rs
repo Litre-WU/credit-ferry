@@ -40,6 +40,17 @@ fn main() {
             let store = Store::open(dir);
             let key = store.load_or_create_api_key();
             let port = store.settings.port;
+            // A second copy can never serve: the forwarding port and the store
+            // files belong to the instance already running. Exit before any
+            // window exists rather than leaving a dead panel on screen.
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                eprintln!(
+                    "端口 {} 已被占用，CreditFerry 已在运行中，本次启动退出",
+                    port
+                );
+                app.handle().exit(0);
+                return Ok(());
+            }
             let state = Arc::new(AppState {
                 store: tokio::sync::Mutex::new(store),
                 loomy: loomy::LoomyClient::new(loomy::LOOMY_BASE),
