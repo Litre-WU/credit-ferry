@@ -87,6 +87,7 @@ jobs:
           args: ${{ matrix.tauriArgs }}
 
       - name: Collect installer artifacts
+        shell: bash
         run: |
           set -e
           BUNDLE=${{ matrix.bundleDir }}
