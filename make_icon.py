@@ -1,6 +1,7 @@
-"""Generate CreditFerry icon: a little red paper boat sailing to the upper right.
-Draws a 4096 master, rescales to every existing icon file's exact size,
-and rebuilds icon.ico (multi-size) + icon.icns + the panel header logo.
+"""Generate CreditFerry icon: red sailboats sailing from lower left to upper
+right, shrinking as they go. Draws a 4096 master, rescales to every existing
+icon file's exact size, and rebuilds icon.ico (multi-size) + icon.icns + the
+panel header logo.
 """
 import glob, os
 from PIL import Image, ImageDraw
@@ -8,12 +9,11 @@ from PIL import Image, ImageDraw
 W = 4096
 cx = W // 2
 
-# palette — cool water background, warm red paper boat
+# palette — cool water background, warm red sails and hulls
 TOP = (206, 240, 249)     # light aqua
 BOT = (126, 196, 226)     # water blue
-FLAP = (250, 150, 126)    # lightest red (folded side wings)
-SAIL_L = (236, 100, 82)   # sail left face (light)
-SAIL_R = (199, 54, 46)    # sail right face (shadow)
+SAIL_L = (236, 100, 82)   # main sail (light)
+SAIL_R = (199, 54, 46)    # jib (shadow side)
 HULL = (226, 84, 68)      # main red
 HULL_D = (178, 46, 40)    # hull bottom shade
 CREAM = (255, 248, 238)   # face
@@ -36,56 +36,49 @@ md.rounded_rectangle([0, 0, W - 1, W - 1], radius=int(W * 0.22), fill=255)
 px_img.putalpha(mask)
 img = px_img.convert("RGBA")
 
-# ---- wake: two strokes kept parallel to the heeled waterline ----
-TILT = 26          # degrees clockwise: bow points up-right
-wake = Image.new("RGBA", (int(W * 0.42), 220), (0, 0, 0, 0))
-wd = ImageDraw.Draw(wake)
-wd.rounded_rectangle([0, 20, int(W * 0.42), 90], radius=35, fill=WAVE + (150,))
-wd.rounded_rectangle([int(W * 0.10), 130, int(W * 0.34), 200], radius=35, fill=WAVE + (100,))
-wake = wake.rotate(-TILT + 8, resample=Image.BICUBIC, expand=True)
-img.alpha_composite(wake, (int(W * 0.07), int(W * 0.70)))
+# ---- one red sailboat, drawn in a 1000x1000 unit box and scaled on demand ----
+def sailboat(size: int, with_face: bool) -> Image.Image:
+    lay = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(lay)
+    u = size / 1000.0
+    P = lambda pts: [(x * u, y * u) for x, y in pts]
+    B = lambda box: [c * u for pt in box for c in pt]
+    lw = lambda n: max(2, int(n * u))
 
-# ---- boat: drawn upright on its own layer, then tilted toward upper right ----
-BOAT = 2500
-bc = BOAT // 2
-layer = Image.new("RGBA", (BOAT, BOAT), (0, 0, 0, 0))
-ld = ImageDraw.Draw(layer)
+    # hull with a darker band at the waterline and a folded rim
+    ld.polygon(P([(150, 700), (850, 700), (730, 845), (270, 845)]), fill=HULL)
+    ld.polygon(P([(205, 785), (795, 785), (730, 845), (270, 845)]), fill=HULL_D)
+    ld.line(P([(150, 700), (850, 700)]), fill=(255, 158, 138), width=lw(10))
+    # mast
+    ld.line(P([(500, 690), (500, 135)]), fill=HULL_D, width=lw(15))
+    # main sail (light, bellied leech) and the shaded jib behind the mast
+    ld.polygon(P([(522, 165), (792, 430), (882, 690), (522, 690)]), fill=SAIL_L)
+    ld.polygon(P([(478, 250), (478, 668), (268, 668)]), fill=SAIL_R)
 
-sail_apex = (bc, 300)
-sail_base = 1460
-sail_bl = (bc - 300, sail_base)
-sail_br = (bc + 300, sail_base)
-hull_tl = (bc - 940, sail_base)
-hull_tr = (bc + 940, sail_base)
-hull_bl = (bc - 660, 2010)
-hull_br = (bc + 660, 2010)
+    if with_face:
+        ld.ellipse(B([(558, 468), (640, 550)]), fill=CREAM)
+        ld.ellipse(B([(692, 468), (774, 550)]), fill=CREAM)
+        ld.arc(B([(582, 545), (758, 662)]), start=20, end=160, fill=CREAM, width=lw(22))
+        ld.ellipse(B([(528, 592), (600, 652)]), fill=CHEEK + (140,))
+        ld.ellipse(B([(752, 592), (824, 652)]), fill=CHEEK + (140,))
+    return lay
 
-# hull (trapezoid) with a darker band at the waterline
-ld.polygon([hull_tl, hull_tr, hull_br, hull_bl], fill=HULL)
-ld.polygon([(bc - 690, 1880), (bc + 690, 1880), hull_br, hull_bl], fill=HULL_D)
-ld.line([hull_tl, hull_tr], fill=(255, 156, 136), width=12)
 
-# folded side wings — the paper-boat cue, kept small and quiet
-ld.polygon([hull_tl, (bc - 1180, 1250), (bc - 320, sail_base)], fill=FLAP)
-ld.polygon([hull_tr, (bc + 1180, 1250), (bc + 320, sail_base)], fill=FLAP)
+def wake_stroke(x0, x1, y, h, alpha):
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([int(W * x0), int(W * y), int(W * x1), int(W * (y + h))],
+                        radius=int(W * h / 2), fill=WAVE + (alpha,))
 
-# central sail, two faces split by the crease
-ld.polygon([sail_apex, sail_bl, (bc, sail_base)], fill=SAIL_L)
-ld.polygon([sail_apex, (bc, sail_base), sail_br], fill=SAIL_R)
-ld.line([sail_apex, (bc, sail_base)], fill=HULL_D, width=9)
 
-# cute face on the sail
-ld.ellipse([bc - 175, 1080, bc - 70, 1185], fill=CREAM)
-ld.ellipse([bc + 70, 1080, bc + 175, 1185], fill=CREAM)
-ld.arc([bc - 150, 1230, bc + 150, 1400], start=25, end=155, fill=CREAM, width=26)
-ld.ellipse([bc - 265, 1215, bc - 165, 1305], fill=CHEEK + (140,))
-ld.ellipse([bc + 165, 1215, bc + 265, 1305], fill=CHEEK + (140,))
-
-layer = layer.rotate(-TILT, resample=Image.BICUBIC, expand=True)
-# sit the boat a touch left-and-low so the diagonal reads as climbing right
-px0 = int(W * 0.50) - layer.width // 2
-py0 = int(W * 0.50) - layer.height // 2
-img.alpha_composite(layer, (px0, py0))
+# ---- fleet: big at the lower left, shrinking toward the upper right ----
+TILT = 7  # degrees clockwise, so the boats heel into their course
+for fx, fy, size, face in ((0.790, 0.352, 430, False),
+                           (0.600, 0.487, 820, False),
+                           (0.315, 0.672, 1850, True)):
+    wake_stroke(fx - size / W * 0.30, fx + size / W * 0.32, fy + size / W * 0.40,
+                size / W * 0.035, 150 if size > 1000 else 105)
+    boat = sailboat(size, face).rotate(-TILT, resample=Image.BICUBIC, expand=True)
+    img.alpha_composite(boat, (int(W * fx) - boat.width // 2, int(W * fy) - boat.height // 2))
 
 master = img
 
