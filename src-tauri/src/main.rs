@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod dsh_connect;
 mod export;
 mod loomy;
 mod maodao;
@@ -112,6 +113,9 @@ fn main() {
             // Close hides to tray; quit happens through the tray menu.
             // The window is built here (not from config) because the CDP
             // browser argument must be set before the webview is created.
+            // 9222 is often already owned by another Chromium on this machine;
+            // CREDITFERRY_CDP_PORT lets a panel check actually attach.
+            let cdp_port = std::env::var("CREDITFERRY_CDP_PORT").unwrap_or_else(|_| "9222".to_string());
             let window: WebviewWindow = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -121,7 +125,7 @@ fn main() {
             .inner_size(1140.0, 800.0)
             .min_inner_size(900.0, 620.0)
             .background_color(tauri::webview::Color(0xf5, 0xf6, 0xf8, 0xff))
-            .additional_browser_args("--remote-debugging-port=9222")
+            .additional_browser_args(&format!("--remote-debugging-port={}", cdp_port))
             .build()?;
             let window_clone = window.clone();
             window.on_window_event(move |event| {
@@ -205,6 +209,8 @@ fn main() {
             commands::cleanup_qoder_intl,
             commands::export_dsh,
             commands::cleanup_dsh,
+            commands::dsh_connect_status,
+            commands::dsh_connect_apply,
             commands::get_snippets,
             commands::set_models_file,
         ])

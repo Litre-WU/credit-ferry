@@ -89,7 +89,7 @@ fn auth(password: &str) -> String {
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Apply the no-console-window flag (no-op off Windows).
-fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
+pub fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);

@@ -732,6 +732,25 @@ pub async fn cleanup_dsh(ferry: FerryState<'_>) -> Result<Value, String> {
     crate::export::cleanup_dsh(&store)
 }
 
+/// Two community connectors that pull WorkBuddy / Qoder models *into* DSH.
+#[tauri::command]
+pub async fn dsh_connect_status(ferry: FerryState<'_>) -> Result<Value, String> {
+    let store = ferry.state.store.lock().await;
+    Ok(crate::dsh_connect::status(&store))
+}
+
+/// install | upgrade | enable | disable | uninstall, for one profile.
+#[tauri::command]
+pub async fn dsh_connect_apply(
+    ferry: FerryState<'_>,
+    platform: String,
+    profile: String,
+    action: String,
+) -> Result<Value, String> {
+    let store = ferry.state.store.lock().await;
+    crate::dsh_connect::apply(&store, &platform, &profile, &action)
+}
+
 /// Which export targets exist on this machine (panel button hints).
 #[tauri::command]
 pub async fn get_snippets(ferry: FerryState<'_>) -> Result<Value, String> {
@@ -747,6 +766,10 @@ pub async fn get_snippets(ferry: FerryState<'_>) -> Result<Value, String> {
             .unwrap_or(false),
         "dshExists": crate::export::resolve_dsh_patch(&store)
             .map(|f| f.is_file())
+            .unwrap_or(false),
+        "dshConnectFound": crate::dsh_connect::status(&store)
+            .get("found")
+            .and_then(|f| f.as_bool())
             .unwrap_or(false),
         "intlExists": crate::export::resolve_models_file_intl(&store)
             .map(|f| f.parent().map(|p| p.is_dir()).unwrap_or(false))

@@ -89,7 +89,7 @@ pub fn merge_models(document: &Value, models: &[crate::store::ModelEntry], endpo
     }
 }
 
-fn prune_backups(file: &Path, keep: usize) {
+pub(crate) fn prune_backups(file: &Path, keep: usize) {
     let dir = match file.parent() {
         Some(d) => d,
         None => return,

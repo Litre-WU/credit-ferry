@@ -28,25 +28,29 @@ npm run dev
 1. **Loomy**：点「扫描本机客户端」（读取 `C:\Users\Public\Loomy\*\userData\auth-session.json`，只读）或手动粘贴会话；
 2. **小浣熊**：点「微信扫码登录」，手机扫码确认；
 3. **OpenCode**：自动就绪，无需操作；
-4. **导出**：点「写入 WorkBuddy models.json」（CN 版 `~/.workbuddy`、国际版 `~/.workbuddy-ai` 各一个按钮）、或「写入 Qoder CN」（`~/.qoder-cn/settings.json` 的 `providers` 下写一个 `openai-compatible` 提供方）。全部自动备份、只动自己标记（`creditFerryOwner: credit-ferry-v1`）的条目；Qwen Code / DSH 的配置片段在下方标签页，复制即用。
+4. **导出**：面板「导出到客户端」里五处一键配置——WorkBuddy CN（`~/.workbuddy/models.json`）、WorkBuddy 国际版（`~/.workbuddy-ai/models.json`）、Qoder CN（`~/.qoder-cn/settings.json`）、Qoder 国际版（`~/.qoder/settings.json`）、DeepSeek Harness（`~/.dsh/profiles/desktop/cordis.patch.yml` + `.credentials.yaml`）。全部自动备份、只动自己标记（`creditFerryOwner: credit-ferry-v1` / 成对注释块）的条目，退出托盘菜单会一并摘除。
+5. **DSH 连接器**：同一张面板可以按 DSH 内核版本安装/升级/启停/卸载 `dsh-workbuddy-connect` 与 `dsh-qoder-connect` 两个社区插件（详见下一节）。
 
-## 接进三个客户端
+## 接进客户端
 
 **WorkBuddy**：`~/.workbuddy/models.json` 由工具合并写入（`creditFerryOwner: "credit-ferry-v1"` 标记，退出时自动摘除，用户手写条目不动）。
 
-**Qwen Code**（`~/.qwen/settings.json`）：
+**Qoder**（CN `~/.qoder-cn/settings.json`、国际版 `~/.qoder/settings.json`）：在 `providers` 下写一个 `openai-compatible` 提供方，`model` 一律用面板里的完整模型 id（如 `Loomy · DeepSeek V4.1 Flash(x2.0)`），密钥复用入口密钥。
 
-```json
-{
-  "modelProviders": {
-    "openai": [{ "id": "credit-ferry", "name": "CreditFerry",
-                 "baseUrl": "http://127.0.0.1:6666/v1", "envKey": "CREDITFERRY_API_KEY" }]
-  },
-  "env": { "CREDITFERRY_API_KEY": "<数据目录>/api-key" }
-}
-```
+**DeepSeek Harness**（`~/.dsh/profiles/desktop/`）：一键把提供方注入 `cordis.patch.yml` 的 `llm-pi-ai → providers:`（成对注释块 `# >>> credit-ferry >>>` 包住，可重复执行不叠加），密钥写进 `~/.dsh/.credentials.yaml` 的 `refs: CREDITFERRY_API_KEY`。
 
-**DeepSeekHarness**：经自定义 provider / 插件机制注册 OpenAI 兼容 provider（`baseUrl` 同上），或用 `OPENAI_BASE_URL` + `OPENAI_API_KEY` 环境变量指向本机。
+## DSH 连接器平台（反方向）
+
+`~/.dsh` 里还可以装两个社区插件，把 **WorkBuddy / Qoder 自己的模型接进 DSH**——方向和上面相反，CreditFerry 只做安装管理与状态读取：
+
+| 平台 | 包名 | 凭据 | 数据位置 |
+|---|---|---|---|
+| WorkBuddy 连接器 | `dsh-workbuddy-connect` | 直接复用 WorkBuddy 桌面 App 登录（国内版/国际版两组） | `$DSH_HOME/.workbuddy*.json` |
+| Qoder 连接器 | `dsh-qoder-connect` | Qoder 个人访问令牌 PAT（CN `qoder` / 国际版 `qoder-global`） | `<profile>/.dsh-qoder-connect/` |
+
+插件激活 = profile 的 `package.json` 里有该依赖 **且** 名字在 `dsh.profile.bundles` 里，DSH 才会套用插件自带的 `cordis.patch.yml`（loader `llm-workbuddy` / `llm-qoder`）。所以本工具只碰这两处和依赖安装本身，loader 树与凭据都由插件自己保管；面板只读「存了没有 / 目录来自哪里 / 多少个模型 / 什么时候签到的」，绝不回显令牌。安装用 DSH 自带的 pnpm 运行时（`~/.dsh/dsh-runtimes/*/dependencies/{node,pnpm}`），找不到时才退回系统 pnpm，两者都没有就在报错里给出 `dsh plugin --profile <p> add <pkg>@<ver>` 手动命令。
+
+版本按各自官方兼容表挑（`dsh_connect.rs::recommended`）：内核 `0.2.0-rc.2` → WorkBuddy `0.7.5` / Qoder `0.2.3`；`0.2.0-rc.1` → `0.7.0`；`0.1.5–0.1.7` → `0.6.5`；Qoder 需要 `>=0.1.7-rc.1`，`0.1.5` 线只能用 `0.2.0`。内核版本来源：桌面 profile 读 `runtime.json` 的 `desktopVersion`，其它 profile 从 `pnpm-lock.yaml` 里 `'@deepseek-ai/dsh-llm': <具体版本>` 解析（范围行跳过）。
 
 ## 安全设计
 
@@ -66,7 +70,10 @@ src-tauri/src/
   loomy.rs      Loomy 上游：会话头（traceparent 必需）、/models、/points/records、会话导入
   raccoon.rs    小浣熊上游：QR 登录/轮换、/model_catalog、/balance、chat
   opencode.rs   OpenCode：运行时获取/隔离启动、/provider 免费判定、信封翻译、审批拒绝
-  export.rs     WorkBuddy 合并 / Qwen / DSH 片段
+  maodao.rs     码道（华为 CodeArts Doer）：SDK-HMAC-SHA256 签名、DPoP/PKCE 登录、客户端密钥库导入
+  probe.rs      可调用性验证：逐模型探活 + TTL 结论（available/timeout/unavailable）
+  export.rs     WorkBuddy / Qoder / DSH 配置合并与摘除
+  dsh_connect.rs DSH 连接器平台：profile 发现、内核匹配版本、安装/启停/卸载与状态读取
   store.rs      本地 JSON 存储、JWT 过期解析、积分账本
 src-frontend/   控制面板（原生 HTML/JS，无构建步骤）
 ```

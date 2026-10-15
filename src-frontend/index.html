@@ -216,6 +216,17 @@
     <div class="muted" style="margin-top:4px">只写入通过「验证可调用性」的模型；验证失败的（如图片模型、暂未开放）会被跳过并在模型表中标注原因。</div>
   </div>
 
+  <div class="section-title">DSH 连接器平台</div>
+  <div class="card">
+    <div class="row">
+      <button class="small" id="btn-connectors-refresh">刷新状态</button>
+      <span class="muted" id="connectors-hint">正在读取 ~/.dsh …</span>
+    </div>
+    <div id="connectors"></div>
+    <div class="muted" style="margin-top:8px">这两个平台的方向和上面相反：它们是 DSH 侧的社区插件，把 WorkBuddy 桌面 App（直接复用 App 登录）和 Qoder（个人访问令牌 PAT）自己的模型接进 DeepSeek Harness。本工具只负责按 DSH 内核版本装/升/启/停/卸这两个插件，并读取它们的运行状态；账号凭据由插件自己保管，这里只显示「存了没有、什么时候存的」，绝不读取或展示令牌内容。</div>
+    <div class="muted" style="margin-top:4px">版本按官方兼容表挑：内核 0.2.0-rc.2 → WorkBuddy 连接器 0.7.5 / Qoder 连接器 0.2.3；0.2.0-rc.1 → 0.7.0；0.1.5–0.1.7 → 0.6.5（Qoder 需 ≥0.1.7-rc.1，0.1.5 线用 0.2.0）。安装走 DSH 自带的 pnpm 运行时，profile 的 package.json 会先备份。</div>
+  </div>
+
   <div class="footer">
     <b>诚实交代</b><br>
     ① 本工具调用你在 Loomy / 小浣熊 上的积分额度，请遵守对应平台的服务条款；积分权益由上游发放与回收，本工具不做任何代领、代扣或破解。<br>

@@ -452,7 +452,106 @@
     invoke('get_api_key').then(function (k) { copyText(k, '入口密钥已复制'); });
   });
 
+  // ------------------------------------------------- DSH connector platforms
+
+  var ACTION_LABEL = {
+    install: '安装并启用',
+    upgrade: '升级到匹配版本',
+    enable: '启用',
+    none: '',
+    unsupported: ''
+  };
+
+  function wbLine(v) {
+    if (!v) return '';
+    var c = v.catalog || {};
+    return (v.desktopAuth ? '桌面 App 已登录' : '桌面 App 未登录')
+      + ' · 插件自留副本' + (v.ownAuth ? '有' : '无')
+      + ' · 目录 ' + (c.present ? c.models + ' 个（' + (c.source || '?') + '，' + fmtTime(c.fetchedAtMs) + '）' : '空');
+  }
+
+  function qoderLine(v) {
+    if (!v) return '';
+    var c = v.catalog || {};
+    return (v.patSaved ? 'PAT 已存（' + (v.region || '?') + '，' + fmtTime(v.savedAtMs) + '）' : '未配 PAT')
+      + ' · 目录 ' + (c.present ? c.models + ' 个（' + (c.source || '?') + '）' : '空');
+  }
+
+  function platformExtra(key, entry, doc) {
+    if (key === 'workbuddy') {
+      var home = doc.workbuddyHome || {};
+      return '国内版：' + wbLine(home.cn) + '；国际版：' + wbLine(home.intl);
+    }
+    var st = entry.state || {};
+    if (!st.present) return '该 profile 还没有这个插件的数据目录（装好后在 DSH 卡片里粘 PAT）';
+    var ci = (st.checkin || {}).cn || {};
+    return '国内版：' + qoderLine(st.cn) + '；国际版：' + qoderLine(st.intl)
+      + ' · 签到 ' + (ci.lastDate || '未签') + (ci.amount ? '（+' + ci.amount + '）' : '')
+      + ' · 自动签到 ' + ((st.autoCheckIn || {}).cn ? '开' : '关')
+      + ' · 侧栏额度 ' + ((st.sidebarQuota || {}).cn ? '开' : '关');
+  }
+
+  function renderConnectors(doc) {
+    var box = $('connectors');
+    if (!doc.found) {
+      $('connectors-hint').textContent = '没找到 ~/.dsh，请先安装并启动一次 DeepSeek Harness';
+      box.innerHTML = '';
+      return;
+    }
+    $('connectors-hint').textContent =
+      '~/.dsh · 桌面内核 ' + (doc.runtimeKernel || '未知')
+      + ' · pnpm ' + ({ bundled: '用 DSH 自带', external: '用系统', none: '不可用' }[doc.pnpm.kind] || doc.pnpm.kind);
+    var html = '';
+    (doc.profiles || []).forEach(function (p) {
+      (p.platforms || []).forEach(function (e) {
+        var label = ACTION_LABEL[e.action] || '';
+        var busy = e.action === 'none' || e.action === 'unsupported';
+        html += '<div class="row" style="margin-top:10px;align-items:flex-start">'
+          + '<div style="flex:1">'
+          + '<b>' + esc(e.title) + '</b> <span class="muted">profile ' + esc(p.name)
+          + ' · 内核 ' + esc(p.kernel || '未知') + ' · ' + esc(e.package) + '</span><br>'
+          + '<span class="muted">' + esc(e.doc) + '</span><br>'
+          + '<span class="muted">已装 ' + esc(e.installed || '无') + ' · ' + (e.enabled ? '已启用' : '未启用')
+          + ' · 推荐 ' + esc(e.recommended || '无匹配') + ' — ' + esc(e.note) + '</span><br>'
+          + '<span class="muted">' + esc(platformExtra(e.key, e, doc)) + '</span>'
+          + '</div><div style="min-width:210px;text-align:right">'
+          + (label ? '<button class="small" data-plat="' + esc(e.key) + '" data-profile="' + esc(p.name)
+              + '" data-action="' + esc(e.action) + '">' + esc(label) + '</button>' : '')
+          + (e.installed ? ' <button class="small" data-plat="' + esc(e.key) + '" data-profile="' + esc(p.name)
+              + '" data-action="disable">停用</button> <button class="small" data-plat="' + esc(e.key)
+              + '" data-profile="' + esc(p.name) + '" data-action="uninstall">卸载</button>' : '')
+          + (busy && e.action === 'unsupported' ? '<div class="muted">升级 DSH 内核后再装</div>' : '')
+          + '</div></div>';
+      });
+    });
+    box.innerHTML = html || '<div class="muted">没有可用的 DSH profile</div>';
+    Array.prototype.forEach.call(box.querySelectorAll('button[data-action]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var args = { platform: btn.dataset.plat, profile: btn.dataset.profile, action: btn.dataset.action };
+        btn.disabled = true;
+        btn.textContent = '执行中…';
+        invoke('dsh_connect_apply', args).then(function (r) {
+          toast(r.changed ? '已完成，重启 DSH 生效' : '没有需要改动的');
+          $('connectors-hint').textContent = (r.log || []).join('\n');
+          loadConnectors();
+        }).catch(function (err) {
+          toast('失败：' + err);
+          loadConnectors();
+        });
+      });
+    });
+  }
+
+  function loadConnectors() {
+    invoke('dsh_connect_status').then(renderConnectors).catch(function (e) {
+      $('connectors-hint').textContent = '读取失败：' + e;
+    });
+  }
+
+  $('btn-connectors-refresh').addEventListener('click', loadConnectors);
+
   // boot
   refresh();
+  loadConnectors();
   setInterval(refresh, 3000);
 })();
