@@ -23,6 +23,7 @@ src-tauri/icons/_preview_*.png
 src-tauri/icons/_master_*.png
 src-tauri/icons/_icons_backup/
 src-tauri/icons/_icons_backup2/
+src-tauri/icons/_icons_backup*/
 
 # --- OS noise ---
 .DS_Store

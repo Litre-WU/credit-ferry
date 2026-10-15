@@ -1,6 +1,6 @@
-"""Generate CreditFerry icon: a little red origami paper boat on water.
+"""Generate CreditFerry icon: a little red paper boat sailing to the upper right.
 Draws a 4096 master, rescales to every existing icon file's exact size,
-and rebuilds icon.ico (multi-size) + icon.icns.
+and rebuilds icon.ico (multi-size) + icon.icns + the panel header logo.
 """
 import glob, os
 from PIL import Image, ImageDraw
@@ -9,15 +9,15 @@ W = 4096
 cx = W // 2
 
 # palette — cool water background, warm red paper boat
-TOP = (198, 235, 246)     # light aqua
-BOT = (118, 188, 220)     # water blue
-FLAP = (247, 140, 114)    # lightest red (open sides)
-SAIL_L = (233, 96, 78)    # sail left face (light)
-SAIL_R = (196, 50, 42)    # sail right face (shadow)
-HULL = (224, 82, 66)      # main red
-HULL_D = (182, 50, 42)    # hull bottom shade
-CREAM = (255, 247, 236)   # face
-CHEEK = (255, 178, 158)
+TOP = (206, 240, 249)     # light aqua
+BOT = (126, 196, 226)     # water blue
+FLAP = (250, 150, 126)    # lightest red (folded side wings)
+SAIL_L = (236, 100, 82)   # sail left face (light)
+SAIL_R = (199, 54, 46)    # sail right face (shadow)
+HULL = (226, 84, 68)      # main red
+HULL_D = (178, 46, 40)    # hull bottom shade
+CREAM = (255, 248, 238)   # face
+CHEEK = (255, 176, 156)
 WAVE = (255, 255, 255)
 
 # ---- gradient rounded-square background (water) ----
@@ -35,48 +35,57 @@ md = ImageDraw.Draw(mask)
 md.rounded_rectangle([0, 0, W - 1, W - 1], radius=int(W * 0.22), fill=255)
 px_img.putalpha(mask)
 img = px_img.convert("RGBA")
-d = ImageDraw.Draw(img)
 
-# ---- boat geometry (4096 space) ----
-apex = (cx, 760)
-base_y = 2300
-sail_bl = (cx - 360, base_y)
-sail_br = (cx + 360, base_y)
-flap_tip_l = (cx - 1350, 1780)
-flap_tip_r = (cx + 1350, 1780)
-hull_tl = (cx - 1080, base_y)
-hull_tr = (cx + 1080, base_y)
-hull_bl = (cx - 820, 2840)
-hull_br = (cx + 820, 2840)
+# ---- wake: two strokes kept parallel to the heeled waterline ----
+TILT = 26          # degrees clockwise: bow points up-right
+wake = Image.new("RGBA", (int(W * 0.42), 220), (0, 0, 0, 0))
+wd = ImageDraw.Draw(wake)
+wd.rounded_rectangle([0, 20, int(W * 0.42), 90], radius=35, fill=WAVE + (150,))
+wd.rounded_rectangle([int(W * 0.10), 130, int(W * 0.34), 200], radius=35, fill=WAVE + (100,))
+wake = wake.rotate(-TILT + 8, resample=Image.BICUBIC, expand=True)
+img.alpha_composite(wake, (int(W * 0.07), int(W * 0.70)))
 
-# ---- ripples under the boat (floating on the water) ----
-d.rounded_rectangle([cx - 470, 2980, cx + 470, 3035], radius=28, fill=WAVE + (150,))
-d.rounded_rectangle([cx - 300, 3100, cx + 300, 3150], radius=24, fill=WAVE + (110,))
-d.ellipse([cx - 700, 3060, cx - 620, 3130], fill=WAVE + (90,))
-d.ellipse([cx + 620, 2940, cx + 700, 3010], fill=WAVE + (90,))
+# ---- boat: drawn upright on its own layer, then tilted toward upper right ----
+BOAT = 2500
+bc = BOAT // 2
+layer = Image.new("RGBA", (BOAT, BOAT), (0, 0, 0, 0))
+ld = ImageDraw.Draw(layer)
 
-# ---- hull (trapezoid, main red, sits behind the rest of the boat) ----
-d.polygon([hull_tl, hull_tr, hull_br, hull_bl], fill=HULL)
-# darker bottom band along the waterline
-d.polygon([(cx - 812, 2760), (cx + 812, 2760), hull_br, hull_bl], fill=HULL_D)
-# folded top rim
-d.line([hull_tl, hull_tr], fill=(255, 150, 130), width=10)
+sail_apex = (bc, 300)
+sail_base = 1460
+sail_bl = (bc - 300, sail_base)
+sail_br = (bc + 300, sail_base)
+hull_tl = (bc - 940, sail_base)
+hull_tr = (bc + 940, sail_base)
+hull_bl = (bc - 660, 2010)
+hull_br = (bc + 660, 2010)
 
-# ---- side flaps (the open boat mouth, lightest red) ----
-d.polygon([hull_tl, flap_tip_l, sail_bl], fill=FLAP)
-d.polygon([hull_tr, flap_tip_r, sail_br], fill=FLAP)
+# hull (trapezoid) with a darker band at the waterline
+ld.polygon([hull_tl, hull_tr, hull_br, hull_bl], fill=HULL)
+ld.polygon([(bc - 690, 1880), (bc + 690, 1880), hull_br, hull_bl], fill=HULL_D)
+ld.line([hull_tl, hull_tr], fill=(255, 156, 136), width=12)
 
-# ---- central sail, two faces (the paper fold cue) ----
-d.polygon([apex, sail_bl, (cx, base_y)], fill=SAIL_L)     # light left face
-d.polygon([apex, (cx, base_y), sail_br], fill=SAIL_R)     # shaded right face
-d.line([apex, (cx, base_y)], fill=HULL_D, width=8)        # center crease
+# folded side wings — the paper-boat cue, kept small and quiet
+ld.polygon([hull_tl, (bc - 1180, 1250), (bc - 320, sail_base)], fill=FLAP)
+ld.polygon([hull_tr, (bc + 1180, 1250), (bc + 320, sail_base)], fill=FLAP)
 
-# ---- cute face on the central sail ----
-d.ellipse([cx - 165, 1800, cx - 60, 1905], fill=CREAM)    # left eye
-d.ellipse([cx + 60, 1800, cx + 165, 1905], fill=CREAM)    # right eye
-d.arc([cx - 150, 1980, cx + 150, 2160], start=30, end=150, fill=CREAM, width=26)  # smile
-d.ellipse([cx - 260, 1960, cx - 150, 2060], fill=CHEEK + (150,))  # cheeks
-d.ellipse([cx + 150, 1960, cx + 260, 2060], fill=CHEEK + (150,))
+# central sail, two faces split by the crease
+ld.polygon([sail_apex, sail_bl, (bc, sail_base)], fill=SAIL_L)
+ld.polygon([sail_apex, (bc, sail_base), sail_br], fill=SAIL_R)
+ld.line([sail_apex, (bc, sail_base)], fill=HULL_D, width=9)
+
+# cute face on the sail
+ld.ellipse([bc - 175, 1080, bc - 70, 1185], fill=CREAM)
+ld.ellipse([bc + 70, 1080, bc + 175, 1185], fill=CREAM)
+ld.arc([bc - 150, 1230, bc + 150, 1400], start=25, end=155, fill=CREAM, width=26)
+ld.ellipse([bc - 265, 1215, bc - 165, 1305], fill=CHEEK + (140,))
+ld.ellipse([bc + 165, 1215, bc + 265, 1305], fill=CHEEK + (140,))
+
+layer = layer.rotate(-TILT, resample=Image.BICUBIC, expand=True)
+# sit the boat a touch left-and-low so the diagonal reads as climbing right
+px0 = int(W * 0.50) - layer.width // 2
+py0 = int(W * 0.50) - layer.height // 2
+img.alpha_composite(layer, (px0, py0))
 
 master = img
 
@@ -135,4 +144,8 @@ down(master, 2048).save(ic_dir + "/_master_2048.png")
 down(master, 512).save(ic_dir + "/_preview_512.png")
 down(master, 128).save(ic_dir + "/_preview_128.png")
 down(master, 32).save(ic_dir + "/_preview_32.png")
-print("done. regenerated", len(pngs), "top-level png + android/ios subdirs + ico + icns")
+
+# ---- the panel header logo lives outside src-tauri/icons ----
+root = os.path.dirname(os.path.abspath(__file__))
+master.resize((256, 256), Image.LANCZOS).save(os.path.join(root, "src-frontend", "icon.png"))
+print("done. regenerated", len(pngs), "top-level png + android/ios subdirs + ico + icns + panel logo")
