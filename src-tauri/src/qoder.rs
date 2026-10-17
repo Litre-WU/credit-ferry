@@ -51,7 +51,11 @@ pub const QODERCN: QoderProduct = QoderProduct {
     source: QODERCN_SOURCE,
     auth_base: "https://qoder.cn",
     open_api_base: "https://openapi.qoder.com.cn",
-    client_id: "f24c2b03-2f37-4f4a-9a52-2b0aa2f27d0f",
+    // ⚠️ 取自 OFM business.mjs L38004（`QODER_CN.clientId`，源自 CN asar 的
+    // `Vpe.authClientIds.prod`）。CN 与国际版**完全不同**，国际版两个 id 在 CN
+    // asar 里命中 0 次。用错的症状是「授权页 302 正常、点击授权后报参数无效」，
+    // 无法靠探测入口发现，必须真实登录闭环才能验证。
+    client_id: "732aef47-9cf2-46a2-95fe-4cebb5d0d1fa",
 };
 
 const DEVICE_SELECT_PATH: &str = "/device/selectAccounts";

@@ -36,6 +36,12 @@ pub const AGENT_HOST: &str = "https://trae-api-cn.mchost.guru";
 pub const UG_HOST: &str = "https://api.trae.cn";
 pub const OAUTH_HOST: &str = "https://api.trae.com.cn";
 pub const CONSOLE_HOST: &str = "https://www.trae.cn";
+/// ⚠️ `clientId` 与 `appId` 是**两个不同的值**，用途也不同：
+/// - `clientId`（OFM business.mjs L39248）= `en1oxy7wnw8j9n` → 用于**授权页
+///   `/authorization` 的 `client_id`** 与 **ExchangeToken 体的 `ClientID`**。
+///   传错会直接被服务端判 `Invalid client.`
+/// - `appId`（L39249）= `6eefa01c-…` → 只用于 **chat 请求头 `X-App-Id`**。
+pub const CLIENT_ID: &str = "en1oxy7wnw8j9n";
 pub const APP_ID: &str = "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8";
 pub const IDE_VERSION: &str = "0.1.52";
 pub const PLUGIN_VERSION: &str = "2.3.62834";
@@ -155,7 +161,7 @@ pub fn login_url(port: u16, machine_id: &str, device_id: &str) -> String {
         ("login_channel", "native_ide"),
         ("plugin_version", PLUGIN_VERSION),
         ("auth_type", "local"),
-        ("client_id", APP_ID),
+        ("client_id", CLIENT_ID),
         ("redirect", "0"),
         ("login_trace_id", &trace),
         ("auth_callback_url", &callback),
@@ -240,7 +246,7 @@ impl TraeClient {
     /// ExchangeToken 请求体：`{ ClientID, RefreshToken, ClientSecret:"-", UserID:"" }`。
     pub async fn exchange(&self, refresh_token: &str) -> Result<TokenCreds, String> {
         let body = json!({
-            "ClientID": APP_ID,
+            "ClientID": CLIENT_ID,
             "RefreshToken": refresh_token,
             "ClientSecret": "-",
             "UserID": ""

@@ -92,8 +92,13 @@ pub fn pct(input: &str) -> String {
 /// `http://127.0.0.1:{port}/auth/callback?code=…` after the user authorises.
 pub fn login_url(port: u16, state: &str) -> String {
     let redirect = pct(&format!("http://127.0.0.1:{}{}", port, CALLBACK_PATH));
+    // ⚠️ 必须带 `/portal` 路径前缀（见 OFM business.mjs L44364：
+    // `` `${product.portalBase}/portal#/login?${query}` ``）。
+    // 漏掉它会被站点重定向到默认登录页
+    // `https://lobsterai.youdao.com/portal#/login?redirect=/?banner=penny`，
+    // 我们的 `source=electron&redirect_uri=…` 被丢弃 → 回调永远收不到 code。
     format!(
-        "{}#/login?source=electron&redirect_uri={}&state={}",
+        "{}/portal#/login?source=electron&redirect_uri={}&state={}",
         PORTAL_BASE, redirect, state
     )
 }
