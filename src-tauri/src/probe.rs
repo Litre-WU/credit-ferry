@@ -31,7 +31,7 @@ fn probe_body(source: &str, model: &str) -> Value {
     let mut body = json!({
         "model": model,
         "messages": [{ "role": "user", "content": "hi" }],
-        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" { 200 } else { 8 },
+        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" || source == "lobsterai" || source == "trae" || source == "minimax" { 200 } else { 8 },
     });
     if source == "maodao" {
         body["stream"] = json!(false);
@@ -52,6 +52,9 @@ pub async fn probe_source(state: &Arc<AppState>, source: &str) -> Vec<(String, S
             "zen" => &store.models.zen,
             "buddy" => &store.models.buddy,
             "workbuddy" => &store.models.workbuddy,
+            "lobsterai" => &store.models.lobsterai,
+            "trae" => &store.models.trae,
+            "minimax" => &store.models.minimax,
             _ => &store.models.loomy,
         };
         list.iter().map(|e| e.upstream_id.clone()).collect()
@@ -290,6 +293,69 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                         Ok(())
                     } else {
                         let text = resp.text().await.unwrap_or_default();
+                        Err(format!("upstream HTTP {}: {}", status.as_u16(), short(&text)))
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "lobsterai" | "trae" | "minimax" => {
+            // Native Bearer-token channels: refresh single-use RT under the
+            // global gate when near expiry, then one streamed probe request.
+            let source = source.to_string();
+            let mut creds = {
+                let store = state.store.lock().await;
+                match source.as_str() {
+                    "lobsterai" => store.credentials.lobsterai.clone(),
+                    "trae" => store.credentials.trae.clone(),
+                    _ => store.credentials.minimax.clone(),
+                }
+            };
+            if !creds.ready() {
+                return StoredVerdict {
+                    ok: false,
+                    note: "未登录".into(),
+                    at_ms: now_ms(),
+                    category: "unavailable".into(),
+                };
+            }
+            if creds.expired() || creds.expires_at - now_ms() < 5 * 60 * 1000 {
+                let _gate = state.refresh_gate.lock().await;
+                let refreshed = match source.as_str() {
+                    "lobsterai" => state.lobsterai.refresh(&mut creds).await,
+                    "trae" => Err("TRAE 暂未支持自动续期，请重新登录".to_string()),
+                    _ => state.minimax.refresh(&mut creds).await,
+                };
+                if let Err(e) = refreshed {
+                    return StoredVerdict {
+                        ok: false,
+                        note: short(&e),
+                        at_ms: now_ms(),
+                        category: "unavailable".into(),
+                    };
+                }
+                let mut store = state.store.lock().await;
+                match source.as_str() {
+                    "lobsterai" => store.credentials.lobsterai = creds.clone(),
+                    "trae" => store.credentials.trae = creds.clone(),
+                    _ => store.credentials.minimax = creds.clone(),
+                }
+                store.save_credentials();
+            }
+            let mut body = body;
+            body["stream"] = json!(true);
+            let resp = match source.as_str() {
+                "lobsterai" => state.lobsterai.chat(&creds, &body).await,
+                "trae" => state.trae.chat(&creds, &body, 0).await,
+                _ => state.minimax.chat(&creds, &body).await,
+            };
+            match resp {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        Ok(())
+                    } else {
+                        let text = r.text().await.unwrap_or_default();
                         Err(format!("upstream HTTP {}: {}", status.as_u16(), short(&text)))
                     }
                 }

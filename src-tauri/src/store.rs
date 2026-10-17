@@ -187,6 +187,39 @@ impl BuddyCreds {
     }
 }
 
+/// 一路通用 Bearer-token 渠道的凭据（lobsterai / trae / minimax … 共用形状：
+/// access_token + 单次消费 refresh_token + 到期时间 + 账号标识）。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenCreds {
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_at: i64,
+    #[serde(default)]
+    pub uid: String,
+    #[serde(default)]
+    pub nickname: String,
+    /// 渠道特有的原始字段（device_id / machine_id / security_oauth_token …），
+    /// 原样保存——TRAE 的设备指纹头要从这里派生。
+    #[serde(default)]
+    pub extra: serde_json::Value,
+}
+
+impl TokenCreds {
+    pub fn ready(&self) -> bool {
+        !self.access_token.is_empty()
+    }
+    pub fn refreshable(&self) -> bool {
+        !self.refresh_token.is_empty()
+    }
+    pub fn expired(&self) -> bool {
+        self.expires_at > 0 && self.expires_at <= crate::store::now_ms()
+    }
+}
+
 /// 一路 native 账号渠道（buddy / workbuddy / …）的登录态。
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -222,6 +255,15 @@ pub struct Credentials {
     /// Native Tencent-family channels (buddy / workbuddy).
     #[serde(default)]
     pub buddy: BuddyState,
+    /// Native LobsterAI (有道).
+    #[serde(default)]
+    pub lobsterai: TokenCreds,
+    /// Native TRAE (字节).
+    #[serde(default)]
+    pub trae: TokenCreds,
+    /// Native MiniMax Code.
+    #[serde(default)]
+    pub minimax: TokenCreds,
     #[serde(default)]
     pub keepalive: KeepaliveState,
 }
@@ -266,6 +308,15 @@ pub struct ModelCache {
     /// WorkBuddy (国际版) — same OAuth protocol, different endpoint/UA.
     #[serde(default)]
     pub workbuddy: Vec<ModelEntry>,
+    /// Native LobsterAI (有道).
+    #[serde(default)]
+    pub lobsterai: Vec<ModelEntry>,
+    /// Native TRAE (字节).
+    #[serde(default)]
+    pub trae: Vec<ModelEntry>,
+    /// Native MiniMax Code.
+    #[serde(default)]
+    pub minimax: Vec<ModelEntry>,
     #[serde(default)]
     pub fetched_at_ms: i64,
     /// Callability verdicts, keyed by "<source>/<upstream_id>".

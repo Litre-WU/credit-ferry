@@ -120,6 +120,9 @@ pub async fn refresh_all(state: &Arc<AppState>) {
     // Buddy family refreshes only when logged in; errors are ignored here.
     let _ = buddy_refresh_inner(state, "buddy").await;
     let _ = buddy_refresh_inner(state, "workbuddy").await;
+    let _ = generic_refresh_inner(state, "lobsterai").await;
+    let _ = generic_refresh_inner(state, "trae").await;
+    let _ = generic_refresh_inner(state, "minimax").await;
     // P1-3: keep the renewal loop alive regardless of the server toggle.
     start_keepalive(state);
 }
@@ -138,7 +141,7 @@ pub async fn auto_probe_if_needed(state: &Arc<AppState>, source: &str) {
 /// Verify every model of one source right now (panel button).
 #[tauri::command]
 pub async fn probe_models(ferry: FerryState<'_>, source: String) -> Result<Value, String> {
-    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" { source } else { "loomy".to_string() };
+    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" || source == "lobsterai" || source == "trae" || source == "minimax" { source } else { "loomy".to_string() };
     let verdicts = crate::probe::probe_source_bounded(&ferry.state, &source).await;
     crate::probe::save_verdicts(&ferry.state, &verdicts, &source).await;
     let ok = verdicts.iter().filter(|(_, v)| v.ok).count();
@@ -871,6 +874,100 @@ pub async fn buddy_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn workbuddy_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
     buddy_refresh_inner(&ferry.state, "workbuddy").await
+}
+
+// ------------------------------------------- lobsterai / trae / minimax
+
+fn generic_creds<'a>(store: &'a crate::store::Store, source: &str) -> &'a crate::store::TokenCreds {
+    match source {
+        "lobsterai" => &store.credentials.lobsterai,
+        "trae" => &store.credentials.trae,
+        _ => &store.credentials.minimax,
+    }
+}
+
+fn put_generic_creds(store: &mut crate::store::Store, source: &str, creds: crate::store::TokenCreds) {
+    match source {
+        "lobsterai" => store.credentials.lobsterai = creds,
+        "trae" => store.credentials.trae = creds,
+        _ => store.credentials.minimax = creds,
+    }
+}
+
+/// Pull the model roster for one Bearer-token channel.
+async fn generic_refresh_inner(state: &Arc<AppState>, source: &str) -> Result<Value, String> {
+    let creds = {
+        let store = state.store.lock().await;
+        generic_creds(&store, source).clone()
+    };
+    if !creds.ready() {
+        return Err(format!("{} 未登录", source));
+    }
+    let models = match source {
+        "lobsterai" => state.lobsterai.catalog(&creds).await,
+        "trae" => state.trae.catalog(&creds).await,
+        _ => state.minimax.catalog(&creds).await,
+    }
+    .map_err(|e| format!("读取 {} 模型失败：{}", source, e))?;
+    let count = models.len();
+    {
+        let mut store = state.store.lock().await;
+        match source {
+            "lobsterai" => store.models.lobsterai = models,
+            "trae" => store.models.trae = models,
+            _ => store.models.minimax = models,
+        }
+        store.models.fetched_at_ms = now_ms();
+        store.save_models();
+    }
+    Ok(json!({ "models": count }))
+}
+
+/// MiniMax Code login: device-code flow — return the verification URL, poll in
+/// the background, persist when the user authorizes.
+async fn minimax_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let (device_code, verify_url) = state
+        .minimax
+        .start_device_login()
+        .await
+        .map_err(|e| format!("minimax 发起登录失败：{}", e))?;
+    open_in_browser(&verify_url);
+    let bg = Arc::clone(state);
+    tauri::async_runtime::spawn(async move {
+        // Poll for a few minutes; the user authorizes in the browser meanwhile.
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if let Ok(creds) = bg.minimax.poll_device_token(&device_code).await {
+                let mut store = bg.store.lock().await;
+                store.credentials.minimax = creds;
+                store.save_credentials();
+                drop(store);
+                let _ = generic_refresh_inner(&bg, "minimax").await;
+                return;
+            }
+        }
+    });
+    Ok(json!({ "authUrl": verify_url }))
+}
+
+#[tauri::command]
+pub async fn minimax_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    minimax_login_inner(&ferry.state).await
+}
+
+#[tauri::command]
+pub async fn minimax_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    generic_refresh_inner(&ferry.state, "minimax").await
+}
+
+#[tauri::command]
+pub async fn lobsterai_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    generic_refresh_inner(&ferry.state, "lobsterai").await
+}
+
+#[tauri::command]
+pub async fn trae_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    generic_refresh_inner(&ferry.state, "trae").await
 }
 
 // ---------------------------------------------------------------- export

@@ -136,6 +136,26 @@
       ? ('已登录' + (wb.nickname ? ('：' + wb.nickname) : '') + ' · 令牌到期 ' + fmtTime(wb.expiresAtMs) + ' · ' + wb.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（国际版账号）';
 
+    // LobsterAI / TRAE / MiniMax (native Bearer-token channels)
+    var lb = snap.lobsterai || { loggedIn: false, models: [], nickname: '' };
+    $('lobsterai-models').textContent = lb.models.length;
+    $('lobsterai-probe-stat').textContent = probeStat(lb.models);
+    $('lobsterai-status').textContent = lb.loggedIn
+      ? ('已登录' + (lb.nickname ? ('：' + lb.nickname) : '') + ' · 令牌到期 ' + fmtTime(lb.expiresAtMs) + ' · ' + lb.models.length + ' 个模型')
+      : '未登录 — 需先在 LobsterAI 官方客户端/网页登录后导入令牌';
+    var tr = snap.trae || { loggedIn: false, models: [], nickname: '' };
+    $('trae-models').textContent = tr.models.length;
+    $('trae-probe-stat').textContent = probeStat(tr.models);
+    $('trae-status').textContent = tr.loggedIn
+      ? ('已登录' + (tr.nickname ? ('：' + tr.nickname) : '') + ' · 令牌到期 ' + fmtTime(tr.expiresAtMs) + ' · ' + tr.models.length + ' 个模型')
+      : '未登录 — 需先在 TRAE 官方客户端/网页登录后导入令牌';
+    var mm = snap.minimax || { loggedIn: false, models: [] };
+    $('minimax-models').textContent = mm.models.length;
+    $('minimax-probe-stat').textContent = probeStat(mm.models);
+    $('minimax-status').textContent = mm.loggedIn
+      ? ('已登录 · 令牌到期 ' + fmtTime(mm.expiresAtMs) + ' · ' + mm.models.length + ' 个模型')
+      : '未登录 — 点「浏览器登录」（设备码授权）';
+
     // Keepalive (P1-3)
     var ka = snap.keepalive || { lastRunMs: 0, notes: [], blocks: [] };
     $('ka-last').textContent = ka.lastRunMs ? fmtTime(ka.lastRunMs) : '尚未巡检';
@@ -153,7 +173,7 @@
       blocksEl.style.display = 'none';
       blocksEl.innerHTML = '';
     }
-    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models);
+    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models);
     $('model-count').textContent = all.length;
     var tbody = document.querySelector('#models-table tbody');
     if (!all.length) {
@@ -172,6 +192,9 @@
           : m.source === 'zen' ? '<span class="badge zen">Zen</span>'
           : m.source === 'buddy' ? '<span class="badge buddy">CodeBuddy</span>'
           : m.source === 'workbuddy' ? '<span class="badge workbuddy">WorkBuddy</span>'
+          : m.source === 'lobsterai' ? '<span class="badge lobsterai">LobsterAI</span>'
+          : m.source === 'trae' ? '<span class="badge trae">TRAE</span>'
+          : m.source === 'minimax' ? '<span class="badge minimax">MiniMax</span>'
           : '<span class="badge loomy">Loomy</span>';
         var probe;
         if (m.probeOk === true) {
@@ -207,6 +230,9 @@
           : e.source === 'zen' ? '<span class="badge zen">Zen</span>'
           : e.source === 'buddy' ? '<span class="badge buddy">CodeBuddy</span>'
           : e.source === 'workbuddy' ? '<span class="badge workbuddy">WorkBuddy</span>'
+          : e.source === 'lobsterai' ? '<span class="badge lobsterai">LobsterAI</span>'
+          : e.source === 'trae' ? '<span class="badge trae">TRAE</span>'
+          : e.source === 'minimax' ? '<span class="badge minimax">MiniMax</span>'
           : '<span class="badge loomy">Loomy</span>';
         var points = e.points == null ? '—' : e.points;
         var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
@@ -421,7 +447,7 @@
 
   // ---- Buddy family (native OAuth login + refresh + probe) ----
   function buddyLogin(source, btn) {
-    var cmd = source === 'workbuddy' ? 'workbuddy_login' : 'buddy_login';
+    var cmd = source === 'workbuddy' ? 'workbuddy_login' : (source === 'minimax' ? 'minimax_login' : 'buddy_login');
     btn.disabled = true;
     btn.textContent = '打开登录页…';
     invoke(cmd).then(function () {
@@ -462,6 +488,29 @@
   $('btn-workbuddy-login').addEventListener('click', function () { buddyLogin('workbuddy', this); });
   $('btn-workbuddy-refresh').addEventListener('click', function () { buddyRefresh('workbuddy', this); });
   $('btn-workbuddy-probe').addEventListener('click', function () { probeClick('workbuddy', this); });
+
+  // ---- LobsterAI / TRAE / MiniMax (native Bearer-token channels) ----
+  function genericRefresh(source, btn) {
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    invoke(source + '_refresh').then(function (r) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast(source + '：' + r.models + ' 个模型');
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast(e);
+    });
+  }
+  $('btn-lobsterai-refresh').addEventListener('click', function () { genericRefresh('lobsterai', this); });
+  $('btn-lobsterai-probe').addEventListener('click', function () { probeClick('lobsterai', this); });
+  $('btn-trae-refresh').addEventListener('click', function () { genericRefresh('trae', this); });
+  $('btn-trae-probe').addEventListener('click', function () { probeClick('trae', this); });
+  $('btn-minimax-refresh').addEventListener('click', function () { genericRefresh('minimax', this); });
+  $('btn-minimax-probe').addEventListener('click', function () { probeClick('minimax', this); });
+  $('btn-minimax-login').addEventListener('click', function () { buddyLogin('minimax', this); });
 
   // ---- 验证可调用性（三源通用） ----
   function probeClick(source, btn) {

@@ -28,10 +28,13 @@ use tokio::sync::{Mutex, Semaphore};
 use crate::buddy::{self, BuddyClient};
 use crate::kilo::KiloClient;
 use crate::loomy::LoomyClient;
+use crate::lobsterai::LobsterClient;
 use crate::maodao::{self, MaodaoClient, MaodaoLogin};
+use crate::minimax::MinimaxClient;
 use crate::opencode::{OpenCodeClient, OpenCodeRuntime};
 use crate::raccoon::{ensure_fresh, RaccoonClient};
 use crate::store::{LedgerEntry, ModelEntry, Store};
+use crate::trae::TraeClient;
 use crate::zen::{self, ZenClient};
 
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -57,6 +60,12 @@ pub struct AppState {
     pub zen_sessions: Mutex<HashMap<String, String>>,
     /// CodeBuddy / WorkBuddy native OAuth channels (buddy.rs).
     pub buddy: BuddyClient,
+    /// LobsterAI (有道) native channel (lobsterai.rs).
+    pub lobsterai: LobsterClient,
+    /// TRAE (字节) native channel (trae.rs).
+    pub trae: TraeClient,
+    /// MiniMax Code native channel (minimax.rs).
+    pub minimax: MinimaxClient,
     pub maodao: MaodaoClient,
     /// In-flight browser login for the Maodao upstream.
     pub maodao_login: Mutex<Option<MaodaoLogin>>,
@@ -134,6 +143,9 @@ pub fn client_model_id(entry: &ModelEntry) -> String {
         "zen" => "Zen",
         "buddy" => "CodeBuddy",
         "workbuddy" => "WorkBuddy",
+        "lobsterai" => "LobsterAI",
+        "trae" => "TRAE",
+        "minimax" => "MiniMax",
         _ => "Loomy",
     };
     format!("{} · {}", prefix, entry.name)
@@ -203,7 +215,10 @@ pub async fn resolve_model(state: &AppState, requested: &str) -> Option<ModelEnt
         .chain(store.models.kilo.iter())
         .chain(store.models.zen.iter())
         .chain(store.models.buddy.iter())
-        .chain(store.models.workbuddy.iter());
+        .chain(store.models.workbuddy.iter())
+        .chain(store.models.lobsterai.iter())
+        .chain(store.models.trae.iter())
+        .chain(store.models.minimax.iter());
     let mut found = None;
     for entry in candidates {
         if client_model_id(entry) == requested || upstream_model_id(entry) == requested {
@@ -443,6 +458,66 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                 obj.insert("stream".into(), Value::Bool(true));
             }
             match state.buddy.chat(product, &creds, &upstream_body).await {
+                Ok(r) => {
+                    if client_stream {
+                        Upstream::Http(r)
+                    } else {
+                        Upstream::HttpFoldSse(r)
+                    }
+                }
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "lobsterai" | "trae" | "minimax" => {
+            // Native Bearer-token channels (lobsterai.rs / trae.rs / minimax.rs).
+            // Each refreshes its single-use RT under the global gate when the
+            // access token is near expiry, then streams; a non-streaming client
+            // gets the SSE folded back into one JSON completion.
+            let source = entry.source.as_str();
+            let mut creds = {
+                let store = state.store.lock().await;
+                match source {
+                    "lobsterai" => store.credentials.lobsterai.clone(),
+                    "trae" => store.credentials.trae.clone(),
+                    _ => store.credentials.minimax.clone(),
+                }
+            };
+            if !creds.ready() {
+                return json_error(StatusCode::UNAUTHORIZED, &format!("{} 未登录", source));
+            }
+            if creds.expired() || creds.expires_at - crate::store::now_ms() < 5 * 60 * 1000 {
+                let _gate = state.refresh_gate.lock().await;
+                let refreshed = match source {
+                    "lobsterai" => state.lobsterai.refresh(&mut creds).await,
+                    "trae" => Err("TRAE 暂未支持自动续期，请重新登录".to_string()),
+                    _ => state.minimax.refresh(&mut creds).await,
+                };
+                if let Err(e) = refreshed {
+                    drop(_gate);
+                    if e.starts_with("REFRESH_TERMINAL") {
+                        return json_error(StatusCode::UNAUTHORIZED,
+                            &format!("{} 会话已失效，请重新登录", source));
+                    }
+                    return json_error(StatusCode::BAD_GATEWAY, &e);
+                }
+                let mut store = state.store.lock().await;
+                match source {
+                    "lobsterai" => store.credentials.lobsterai = creds.clone(),
+                    "trae" => store.credentials.trae = creds.clone(),
+                    _ => store.credentials.minimax = creds.clone(),
+                }
+                store.save_credentials();
+            }
+            let client_stream = stream;
+            if let Some(obj) = upstream_body.as_object_mut() {
+                obj.insert("stream".into(), Value::Bool(client_stream));
+            }
+            let resp = match source {
+                "lobsterai" => state.lobsterai.chat(&creds, &upstream_body).await,
+                "trae" => state.trae.chat(&creds, &upstream_body, 0).await,
+                _ => state.minimax.chat(&creds, &upstream_body).await,
+            };
+            match resp {
                 Ok(r) => {
                     if client_stream {
                         Upstream::Http(r)
@@ -756,6 +831,9 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let mut zen_models = Vec::new();
     let mut buddy_models = Vec::new();
     let mut workbuddy_models = Vec::new();
+    let mut lobsterai_models = Vec::new();
+    let mut trae_models = Vec::new();
+    let mut minimax_models = Vec::new();
     for entry in store.models.loomy.iter() {
         loomy_models.push(model_json(&store, entry));
     }
@@ -779,6 +857,15 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     }
     for entry in store.models.workbuddy.iter() {
         workbuddy_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.lobsterai.iter() {
+        lobsterai_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.trae.iter() {
+        trae_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.minimax.iter() {
+        minimax_models.push(model_json(&store, entry));
     }
     let active = store.credentials.loomy.active.clone();
     let loomy_session = store.credentials.loomy.sessions.iter().find(|s| Some(&s.name) == active.as_ref());
@@ -851,6 +938,23 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "nickname": store.credentials.buddy.workbuddy.nickname,
             "expiresAtMs": store.credentials.buddy.workbuddy.expires_at,
             "models": workbuddy_models,
+        },
+        "lobsterai": {
+            "loggedIn": store.credentials.lobsterai.ready(),
+            "nickname": store.credentials.lobsterai.nickname,
+            "expiresAtMs": store.credentials.lobsterai.expires_at,
+            "models": lobsterai_models,
+        },
+        "trae": {
+            "loggedIn": store.credentials.trae.ready(),
+            "nickname": store.credentials.trae.nickname,
+            "expiresAtMs": store.credentials.trae.expires_at,
+            "models": trae_models,
+        },
+        "minimax": {
+            "loggedIn": store.credentials.minimax.ready(),
+            "expiresAtMs": store.credentials.minimax.expires_at,
+            "models": minimax_models,
         },
         // P1-3 keepalive loop state (rounds, notes, terminal blocks).
         "keepalive": crate::keepalive::keepalive_json(&store),

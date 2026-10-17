@@ -7,12 +7,15 @@ mod export;
 mod keepalive;
 mod kilo;
 mod loomy;
+mod lobsterai;
 mod maodao;
+mod minimax;
 mod opencode;
 mod probe;
 mod raccoon;
 mod server;
 mod store;
+mod trae;
 mod zen;
 
 use std::sync::Arc;
@@ -66,6 +69,9 @@ fn main() {
                 kilo: kilo::KiloClient::new(),
                 zen: zen::ZenClient::new(),
                 buddy: buddy::BuddyClient::new(),
+                lobsterai: lobsterai::LobsterClient::new(),
+                trae: trae::TraeClient::new(),
+                minimax: minimax::MinimaxClient::new(),
                 zen_sessions: tokio::sync::Mutex::new(zen::load_session_map(&zen_dir)),
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
@@ -237,6 +243,10 @@ fn main() {
             commands::buddy_refresh,
             commands::workbuddy_login,
             commands::workbuddy_refresh,
+            commands::minimax_login,
+            commands::minimax_refresh,
+            commands::lobsterai_refresh,
+            commands::trae_refresh,
             commands::keepalive_run_once,
             commands::keepalive_status,
             commands::export_workbuddy,

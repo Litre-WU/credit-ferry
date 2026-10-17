@@ -45,6 +45,9 @@
   .badge.zen { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
   .badge.buddy { background: #f0f9ff; color: #075985; border: 1px solid #bae6fd; }
   .badge.workbuddy { background: #f5f3ff; color: #5b21b6; border: 1px solid #ddd6fe; }
+  .badge.lobsterai { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .badge.trae { background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; }
+  .badge.minimax { background: #fefce8; color: #a16207; border: 1px solid #fde68a; }
   .badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.no { background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb; }
   .badge.free { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
@@ -73,7 +76,7 @@
   <img class="logo" src="./icon.png" alt="">
   <div>
     <h1>CreditFerry 积分摆渡</h1>
-    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy → 本机 OpenAI 兼容口</div>
+    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax → 本机 OpenAI 兼容口</div>
   </div>
   <span id="server-pill" class="pill off">服务未启动</span>
 </div>
@@ -216,6 +219,46 @@
         <span class="stat"><b id="workbuddy-probe-stat">—</b><span>可调用/已验</span></span>
       </div>
       <div id="workbuddy-status" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- LobsterAI (有道) -->
+    <div class="card">
+      <h2><span class="badge lobsterai">LobsterAI</span> 有道 LobsterAI</h2>
+      <div class="desc">原生接入 <span class="endpoint">lobsterai-server.youdao.com</span>：OAuth 浏览器登录换令牌，对话经 <span class="endpoint">/api/proxy/v1/chat/completions</span>。账号积分不足时返回 402「积分不足」，工具据此提示充值。</div>
+      <div class="row">
+        <button id="btn-lobsterai-refresh">刷新模型</button>
+        <button id="btn-lobsterai-probe">验证可调用性</button>
+        <span class="stat"><b id="lobsterai-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="lobsterai-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="lobsterai-status" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- TRAE (字节) -->
+    <div class="card">
+      <h2><span class="badge trae">TRAE</span> 字节 TRAE</h2>
+      <div class="desc">原生接入 <span class="endpoint">api.trae.cn / trae-api-cn</span>：OAuth 登录后按 userId 派生设备指纹（deviceId / marketUserId / machineId 轮换），对话走伪装 IDE 身份头。额度来自每日签到积分。</div>
+      <div class="row">
+        <button id="btn-trae-refresh">刷新模型</button>
+        <button id="btn-trae-probe">验证可调用性</button>
+        <span class="stat"><b id="trae-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="trae-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="trae-status" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- MiniMax Code -->
+    <div class="card">
+      <h2><span class="badge minimax">MiniMax</span> MiniMax Code</h2>
+      <div class="desc">设备码登录（浏览器授权一次）→ <span class="endpoint">agent.minimax.cn</span> 自定义 messages 协议。账号带每日签到积分，可在 <span class="endpoint">/minimax-cloud/api/v1/credit/details</span> 查询余额。</div>
+      <div class="row">
+        <button class="primary" id="btn-minimax-login">浏览器登录</button>
+        <button id="btn-minimax-refresh">刷新模型</button>
+        <button id="btn-minimax-probe">验证可调用性</button>
+        <span class="stat"><b id="minimax-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="minimax-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="minimax-status" class="muted" style="margin-top:8px"></div>
     </div>
   </div>
 
