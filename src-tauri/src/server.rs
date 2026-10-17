@@ -63,6 +63,18 @@ pub struct AppState {
     /// (`并发会话数已达上限(3个)`), so its calls are queued separately from the
     /// global limit — an agent client fires several requests per turn.
     pub maodao_sem: Arc<Semaphore>,
+    /// P1-3 keepalive gate. Maodao STS and Raccoon refresh tokens are
+    /// **single-use** (each rotation consumes the old RT): two concurrent
+    /// rotations guarantee one side burns a dead token and can trip the
+    /// upstream's terminal revocation (OFM CodeArts 401 storm). Every path
+    /// that rotates a token — the keepalive loop, chat forwarding, and
+    /// probes — must hold this gate across ensure_fresh. Lock order:
+    /// acquire the gate only with the store lock NOT held; the gate is held
+    /// while briefly taking the store lock (never the reverse).
+    pub refresh_gate: Mutex<()>,
+    /// P1-3: set once the keepalive loop has been spawned (compare_exchange
+    /// guard so the loop is never started twice by different triggers).
+    pub keepalive_started: std::sync::atomic::AtomicBool,
 }
 
 /// What the upstreams hand back after a chat call.
@@ -312,6 +324,9 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
             }
         }
         "maodao" => {
+            // P1-3: rotation is single-use — hold the keepalive gate across
+            // load → ensure_fresh → persist so no other path burns the RT.
+            let _gate = state.refresh_gate.lock().await;
             let mut creds = {
                 let store = state.store.lock().await;
                 store.credentials.maodao.clone()
@@ -327,6 +342,7 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                 store.credentials.maodao = creds.clone();
                 store.save_credentials();
             }
+            drop(_gate);
             // The upstream answers with SSE even when `stream` is omitted, so
             // pin it explicitly to whatever the client asked for.
             if let Some(obj) = upstream_body.as_object_mut() {
@@ -342,6 +358,8 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
             }
         }
         "raccoon" => {
+            // P1-3: single-use refresh token — same gate as Maodao.
+            let _gate = state.refresh_gate.lock().await;
             let mut creds = {
                 let store = state.store.lock().await;
                 store.credentials.raccoon.clone()
@@ -357,6 +375,7 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                 store.credentials.raccoon = creds.clone();
                 store.save_credentials();
             }
+            drop(_gate);
             match state.raccoon.chat(&creds, &upstream_body).await {
                 Ok(r) => Upstream::Http(r),
                 Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
@@ -747,6 +766,8 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "sessions": state.zen_sessions.lock().await.len(),
             "models": zen_models,
         },
+        // P1-3 keepalive loop state (rounds, notes, terminal blocks).
+        "keepalive": crate::keepalive::keepalive_json(&store),
         "modelsFetchedAtMs": store.models.fetched_at_ms,
         "ledger": ledger,
     })

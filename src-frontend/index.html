@@ -189,6 +189,17 @@
     </div>
   </div>
 
+  <div class="section-title">账号保活（后台自动续期）</div>
+  <div class="card">
+    <div class="desc">移植自 Our Free Model 的凭据续期纪律：每 30 分钟巡检一轮，会话进入<b>过期前 1 小时窗</b>才真正轮换令牌（码道 STS / 小浣熊的 refresh_token 是一次性消费的，并发续期必烧死凭据——所有续期路径共用一把全局串行闸）。终态失败（invalid_grant / 401 / 403）停止自动续期并提示重新登录，24 小时自动重查；瞬态失败（429 / 5xx）10 分钟退避、网络异常 60 秒退避，绝不误杀在线会话。Loomy 无可续期凭据，每轮改为重扫本机客户端登录态补会话。</div>
+    <div class="row">
+      <button id="btn-keepalive-run">立即巡检一轮</button>
+      <span class="stat"><b id="ka-last">—</b><span>上轮巡检</span></span>
+    </div>
+    <div id="ka-status" class="muted" style="margin-top:8px"></div>
+    <div id="ka-blocks" class="muted" style="margin-top:6px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#b91c1c;display:none"></div>
+  </div>
+
   <div class="section-title">已发布模型（<span id="model-count">0</span>）<span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用</span></div>
   <div class="card">
     <table id="models-table">

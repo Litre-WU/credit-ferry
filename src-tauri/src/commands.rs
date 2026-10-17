@@ -79,6 +79,36 @@ pub async fn server_status(ferry: FerryState<'_>) -> Result<Value, String> {
     Ok(json!({ "running": running, "port": port }))
 }
 
+// ---------------------------------------------------------------- keepalive
+
+/// Start the background keepalive loop if it is not running yet.
+/// Independent of the forwarding port — credential renewal must continue
+/// even while the server is stopped (panel toggle / server_start idempotent).
+pub(crate) fn start_keepalive(state: &Arc<AppState>) {
+    if state
+        .keepalive_started
+        .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .is_ok()
+    {
+        crate::keepalive::spawn(Arc::clone(state));
+    }
+}
+
+/// Force one keepalive round right now (panel button).
+#[tauri::command]
+pub async fn keepalive_run_once(ferry: FerryState<'_>) -> Result<Value, String> {
+    start_keepalive(&ferry.state);
+    let (_, snapshot) = crate::keepalive::run_round(&ferry.state).await;
+    Ok(snapshot)
+}
+
+/// Current keepalive state (panel polling).
+#[tauri::command]
+pub async fn keepalive_status(ferry: FerryState<'_>) -> Result<Value, String> {
+    let store = ferry.state.store.lock().await;
+    Ok(crate::keepalive::keepalive_json(&store))
+}
+
 /// Refresh every logged-in upstream (used on server start).
 pub async fn refresh_all(state: &Arc<AppState>) {
     let _ = loomy_refresh_inner(state).await;
@@ -87,6 +117,8 @@ pub async fn refresh_all(state: &Arc<AppState>) {
     let _ = maodao_refresh_inner(state).await;
     let _ = kilo_refresh_inner(state).await;
     let _ = zen_refresh_inner(state).await;
+    // P1-3: keep the renewal loop alive regardless of the server toggle.
+    start_keepalive(state);
 }
 
 /// After a catalogue refresh, verify any model that has never been probed
@@ -396,6 +428,8 @@ pub async fn raccoon_qr_status(ferry: FerryState<'_>) -> Result<Value, String> {
                 store.credentials.raccoon.refresh_token = refresh;
                 store.credentials.raccoon.expires_at_ms = expires_at_ms;
                 store.credentials.raccoon.nickname = nickname;
+                // Fresh credential: any stale terminal block is void now.
+                store.credentials.keepalive.blocks.remove("raccoon");
                 store.save_credentials();
             }
             *ferry.qr.lock().await = None;
@@ -419,6 +453,7 @@ impl QrFlow {
 pub async fn raccoon_logout(ferry: FerryState<'_>) -> Result<Value, String> {
     let mut store = ferry.state.store.lock().await;
     store.credentials.raccoon = Default::default();
+    store.credentials.keepalive.blocks.remove("raccoon");
     store.models.raccoon.clear();
     store.save_credentials();
     store.save_models();
@@ -427,6 +462,8 @@ pub async fn raccoon_logout(ferry: FerryState<'_>) -> Result<Value, String> {
 
 /// Refresh the Raccoon catalogue + credit balance (auto-rotates the token).
 pub async fn raccoon_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    // P1-3: this path rotates too — same gate; clear any terminal block on success.
+    let _gate = state.refresh_gate.lock().await;
     let mut creds = {
         let store = state.store.lock().await;
         store.credentials.raccoon.clone()
@@ -438,8 +475,10 @@ pub async fn raccoon_refresh_inner(state: &Arc<AppState>) -> Result<Value, Strin
     {
         let mut store = state.store.lock().await;
         store.credentials.raccoon = creds.clone();
+        store.credentials.keepalive.blocks.remove("raccoon");
         store.save_credentials();
     }
+    drop(_gate);
     let models = state
         .raccoon
         .catalog(&creds)
@@ -488,6 +527,8 @@ pub async fn maodao_import_client(ferry: FerryState<'_>) -> Result<Value, String
     {
         let mut store = ferry.state.store.lock().await;
         store.credentials.maodao = creds;
+        // Fresh credential: any stale terminal block is void now.
+        store.credentials.keepalive.blocks.remove("maodao");
         store.save_credentials();
     }
     maodao_refresh_inner(&ferry.state).await
@@ -585,6 +626,8 @@ pub async fn maodao_login_status(ferry: FerryState<'_>) -> Result<Value, String>
             {
                 let mut store = ferry.state.store.lock().await;
                 store.credentials.maodao = creds;
+                // Fresh credential: any stale terminal block is void now.
+                store.credentials.keepalive.blocks.remove("maodao");
                 store.save_credentials();
             }
             let refreshed = maodao_refresh_inner(&ferry.state).await;
@@ -602,6 +645,7 @@ pub async fn maodao_logout(ferry: FerryState<'_>) -> Result<Value, String> {
     *ferry.state.maodao_login.lock().await = None;
     let mut store = ferry.state.store.lock().await;
     store.credentials.maodao = Default::default();
+    store.credentials.keepalive.blocks.remove("maodao");
     store.models.maodao.clear();
     store.save_credentials();
     store.save_models();
@@ -610,6 +654,8 @@ pub async fn maodao_logout(ferry: FerryState<'_>) -> Result<Value, String> {
 
 /// Refresh the Maodao catalogue + token balance (auto-rotates the session).
 pub async fn maodao_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    // P1-3: this path rotates too — same gate; clear any terminal block on success.
+    let _gate = state.refresh_gate.lock().await;
     let mut creds = {
         let store = state.store.lock().await;
         store.credentials.maodao.clone()
@@ -623,8 +669,10 @@ pub async fn maodao_refresh_inner(state: &Arc<AppState>) -> Result<Value, String
     {
         let mut store = state.store.lock().await;
         store.credentials.maodao = creds.clone();
+        store.credentials.keepalive.blocks.remove("maodao");
         store.save_credentials();
     }
+    drop(_gate);
     let models = state
         .maodao
         .catalog(&creds)

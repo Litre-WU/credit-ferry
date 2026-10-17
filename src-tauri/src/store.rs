@@ -132,6 +132,32 @@ impl MaodaoCreds {
     }
 }
 
+/// A terminal refresh failure: the refresh token itself was rejected
+/// (invalid_grant / auth 4xx), so auto-renewal stops until re-login.
+/// Transient failures (network, 5xx, 429) never land here — a false mark
+/// would strand a live session (OFM lesson: refreshable mirrors the
+/// credential material, not the case history).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockInfo {
+    pub reason: String,
+    pub at_ms: i64,
+}
+
+/// Bookkeeping for the background keepalive loop (P1-3, OFM-style).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepaliveState {
+    /// source ("maodao" | "raccoon") → terminal block.
+    #[serde(default)]
+    pub blocks: BTreeMap<String, BlockInfo>,
+    #[serde(default)]
+    pub last_run_ms: i64,
+    /// source → last round verdict, surfaced in the panel.
+    #[serde(default)]
+    pub notes: BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Credentials {
     #[serde(default)]
@@ -140,6 +166,8 @@ pub struct Credentials {
     pub raccoon: RaccoonCreds,
     #[serde(default)]
     pub maodao: MaodaoCreds,
+    #[serde(default)]
+    pub keepalive: KeepaliveState,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

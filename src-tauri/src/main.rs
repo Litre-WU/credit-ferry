@@ -3,6 +3,7 @@
 mod commands;
 mod dsh_connect;
 mod export;
+mod keepalive;
 mod kilo;
 mod loomy;
 mod maodao;
@@ -69,6 +70,8 @@ fn main() {
                 key,
                 sem: Arc::new(tokio::sync::Semaphore::new(server::MAX_CONCURRENCY)),
                 maodao_sem: Arc::new(tokio::sync::Semaphore::new(server::MAODAO_CONCURRENCY)),
+                refresh_gate: tokio::sync::Mutex::new(()),
+                keepalive_started: std::sync::atomic::AtomicBool::new(false),
                 })
             };
             let ferry = Arc::new(Ferry {
@@ -77,6 +80,13 @@ fn main() {
                 server_task: tokio::sync::Mutex::new(None),
             });
             app.manage(ferry.clone());
+
+            // P1-3 keepalive: renewal is a property of the *credentials*,
+            // not of the forwarding port, so it starts unconditionally.
+            {
+                let ka_state = Arc::clone(&ferry.state);
+                commands::start_keepalive(&ka_state);
+            }
 
             // Tray: left-click shows the panel; menu exposes show + quit.
             let show = MenuItem::with_id(app, "show", "显示面板", true, None::<&str>)?;
@@ -221,6 +231,8 @@ fn main() {
             commands::maodao_refresh,
             commands::kilo_refresh,
             commands::zen_refresh,
+            commands::keepalive_run_once,
+            commands::keepalive_status,
             commands::export_workbuddy,
             commands::cleanup_workbuddy,
             commands::export_workbuddy_intl,

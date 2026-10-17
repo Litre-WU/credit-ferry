@@ -234,9 +234,11 @@ pub async fn find_runtime(data_dir: &Path, status: &(dyn Fn(&str) + Sync)) -> Re
         }
     };
     let latest = metadata.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if let Some((v, file)) = best {
-        if v >= latest {
-            return Ok(file);
+    if let Some((v, _)) = best.as_ref() {
+        if v >= &latest {
+            if let Some((_, file)) = best {
+                return Ok(file);
+            }
         }
     }
 
@@ -281,6 +283,15 @@ pub async fn find_runtime(data_dir: &Path, status: &(dyn Fn(&str) + Sync)) -> Re
     let bytes = match downloaded {
         Some(b) => b,
         None => {
+            // The npm tarball's `bin/opencode.exe` is only a JS stub on
+            // Windows — the real binary arrives via the postinstall script,
+            // which we never run. Whenever a fresh copy cannot be obtained or
+            // verified, fall back to the best LOCAL copy instead of failing:
+            // a stale-but-real runtime beats no runtime.
+            if let Some((v, file)) = best {
+                eprintln!("opencode: 下载/校验失败，回退本机已有运行时 {}", v);
+                return Ok(file);
+            }
             if checksum_failed {
                 return Err("OpenCode 下载完整性校验失败".into());
             }
@@ -318,6 +329,16 @@ pub async fn find_runtime(data_dir: &Path, status: &(dyn Fn(&str) + Sync)) -> Re
         let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
     }
     if version_of(&target).as_deref() != Some(latest.as_str()) {
+        // The npm `bin/opencode.exe` is a JS stub on Windows (the real
+        // binary is fetched by a postinstall script we deliberately do not
+        // run). A failed version check almost always means "stub": drop the
+        // poisoned copy and fall back to the best local runtime rather than
+        // leaving the upstream dead.
+        let _ = std::fs::remove_file(&target);
+        if let Some((v, file)) = best {
+            eprintln!("opencode: 下载包不含真实二进制（stub），回退本机已有运行时 {}", v);
+            return Ok(file);
+        }
         return Err("下载的 OpenCode 版本校验失败".into());
     }
     Ok(target)

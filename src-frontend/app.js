@@ -121,6 +121,24 @@
     $('zen-probe-stat').textContent = probeStat(zn.models);
     $('zen-sessions').textContent = zn.sessions || 0;
     $('zen-status').textContent = '匿名公共池 · ' + zn.models.length + ' 个免费车道模型 · 会话映射 ' + (zn.sessions || 0) + ' 条';
+
+    // Keepalive (P1-3)
+    var ka = snap.keepalive || { lastRunMs: 0, notes: [], blocks: [] };
+    $('ka-last').textContent = ka.lastRunMs ? fmtTime(ka.lastRunMs) : '尚未巡检';
+    var kaNames = { maodao: '码道', raccoon: '小浣熊', loomy: 'Loomy' };
+    $('ka-status').textContent = (ka.notes && ka.notes.length)
+      ? ka.notes.map(function (n) { return (kaNames[n.source] || n.source) + '：' + n.note; }).join('　|　')
+      : '后台每 ' + (ka.intervalMinutes || 30) + ' 分钟巡检一轮（过期前 ' + (ka.leadMinutes || 60) + ' 分钟窗内才轮换）';
+    var blocksEl = $('ka-blocks');
+    if (ka.blocks && ka.blocks.length) {
+      blocksEl.style.display = 'block';
+      blocksEl.innerHTML = '⚠ 终态标记（需重新登录，24 小时后自动重查）：' + ka.blocks.map(function (b) {
+        return '<b>' + (kaNames[b.source] || b.source) + '</b> ' + esc(b.reason) + '（' + fmtTime(b.atMs) + '）';
+      }).join('；');
+    } else {
+      blocksEl.style.display = 'none';
+      blocksEl.innerHTML = '';
+    }
     var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models);
     $('model-count').textContent = all.length;
     var tbody = document.querySelector('#models-table tbody');
@@ -405,6 +423,23 @@
   $('btn-maodao-probe').addEventListener('click', function () { probeClick('maodao', this); });
   $('btn-kilo-probe').addEventListener('click', function () { probeClick('kilo', this); });
   $('btn-zen-probe').addEventListener('click', function () { probeClick('zen', this); });
+
+  // ---- 账号保活：立即巡检一轮 ----
+  $('btn-keepalive-run').addEventListener('click', function () {
+    var btn = $('btn-keepalive-run');
+    btn.disabled = true;
+    btn.textContent = '巡检中…';
+    invoke('keepalive_run_once').then(function () {
+      btn.disabled = false;
+      btn.textContent = '立即巡检一轮';
+      toast('保活巡检完成');
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '立即巡检一轮';
+      toast('巡检失败：' + e);
+    });
+  });
 
   $('btn-export-wb').addEventListener('click', function () {
     invoke('export_workbuddy').then(function (r) {

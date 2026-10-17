@@ -101,6 +101,8 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
             }
         }
         "maodao" => {
+            // P1-3: probes rotate the single-use RT too — same gate.
+            let _gate = state.refresh_gate.lock().await;
             let mut creds = {
                 let store = state.store.lock().await;
                 store.credentials.maodao.clone()
@@ -127,6 +129,7 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 store.credentials.maodao = creds.clone();
                 store.save_credentials();
             }
+            drop(_gate);
             match state.maodao.chat(&creds, &body).await {
                 Ok(resp) => {
                     let status = resp.status();
@@ -141,6 +144,8 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
             }
         }
         "raccoon" => {
+            // P1-3: single-use refresh token — same gate.
+            let _gate = state.refresh_gate.lock().await;
             let mut creds = {
                 let store = state.store.lock().await;
                 store.credentials.raccoon.clone()
@@ -154,6 +159,12 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 };
             }
             crate::raccoon::ensure_fresh(&state.raccoon, &mut creds, 5 * 60 * 1000).await;
+            {
+                let mut store = state.store.lock().await;
+                store.credentials.raccoon = creds.clone();
+                store.save_credentials();
+            }
+            drop(_gate);
             match state.raccoon.chat(&creds, &body).await {
                 Ok(resp) => {
                     let status = resp.status();
