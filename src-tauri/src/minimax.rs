@@ -14,8 +14,10 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
 use reqwest::Client;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::store::{ModelEntry, TokenCreds};
 
@@ -76,6 +78,18 @@ pub fn build_minimax_catalog(rows: &[Value]) -> Vec<ModelEntry> {
     out
 }
 
+/// 极简 percent-encoding（RFC3986 非保留字符透传），用于 form 编码字段值。
+fn urlencode(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
 pub struct MinimaxClient {
     http: Client,
     listing: Client,
@@ -88,11 +102,21 @@ impl MinimaxClient {
         Self { http, listing }
     }
 
-    /// 登录第 1 步：申请 device code，返回 (device_code, verification_uri)。
-    pub async fn start_device_login(&self) -> Result<(String, String), String> {
+    /// 登录第 1 步：申请 device code。
+    /// 模仿 OFM startMinimaxDeviceAuthorization：POST form-urlencoded，带 PKCE S256。
+    /// 返回 (device_code, verification_uri_complete, code_verifier)。
+    pub async fn start_device_login(&self) -> Result<(String, String, String), String> {
+        let code_verifier = crate::store::new_hex(32);
+        let digest = Sha256::digest(code_verifier.as_bytes());
+        let code_challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+        let body = format!(
+            "client_id={}&scope={}&audience={}&code_challenge={}&code_challenge_method=S256",
+            CLIENT_ID, SCOPE, AUDIENCE, code_challenge
+        );
         let resp = self.http.post(format!("{}{}", ACCOUNT_HOST, DEVICE_CODE_PATH))
-            .header("Content-Type", "application/json")
-            .json(&json!({ "client_id": CLIENT_ID, "audience": AUDIENCE, "scope": SCOPE }))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "application/json")
+            .body(body)
             .send().await.map_err(|e| format!("minimax device code: {}", e))?;
         let status = resp.status();
         let value: Value = resp.json().await.map_err(|e| format!("minimax device code body: {}", e))?;
@@ -101,22 +125,24 @@ impl MinimaxClient {
         }
         let data = unwrap_envelope(&value)?;
         let device_code = data.get("device_code").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let verify = data.get("verification_uri").or_else(|| data.get("verification_uri_complete"))
+        let verify = data.get("verification_uri_complete")
+            .or_else(|| data.get("verification_uri"))
             .and_then(|v| v.as_str()).unwrap_or("").to_string();
         if device_code.is_empty() {
             return Err("device code 响应缺少 device_code".into());
         }
-        Ok((device_code, verify))
+        Ok((device_code, verify, code_verifier))
     }
 
     /// 登录第 2 步：轮询 token（device_code + client_id 换 access_token）。
-    pub async fn poll_device_token(&self, device_code: &str) -> Result<TokenCreds, String> {
+    pub async fn poll_device_token(&self, device_code: &str, code_verifier: &str) -> Result<TokenCreds, String> {
         let resp = self.http.post(format!("{}{}", ACCOUNT_HOST, TOKEN_PATH))
             .header("Content-Type", "application/json")
-            .json(&json!({
-                "client_id": CLIENT_ID, "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            }))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(format!(
+                "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code={}&client_id={}&code_verifier={}",
+                urlencode(device_code), urlencode(CLIENT_ID), urlencode(code_verifier)
+            ))
             .send().await.map_err(|e| format!("minimax token: {}", e))?;
         let status = resp.status();
         let value: Value = resp.json().await.map_err(|e| format!("minimax token body: {}", e))?;

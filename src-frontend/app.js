@@ -129,14 +129,14 @@
     $('buddy-status').textContent = bd.loggedIn
       ? ('已登录' + (bd.nickname ? ('：' + bd.nickname) : '') + ' · 令牌到期 ' + fmtTime(bd.expiresAtMs) + ' · ' + bd.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（自动打开官方登录页，完成后自动拉取目录）';
-    $('buddy-balance').textContent = (bd.balance != null) ? bd.balance : '—（本渠道不查询余额）';
+    $('buddy-balance').textContent = (bd.balance != null) ? bd.balance : '—';
     var wb = snap.workbuddy || { loggedIn: false, models: [], nickname: '' };
     $('workbuddy-models').textContent = wb.models.length;
     $('workbuddy-probe-stat').textContent = probeStat(wb.models);
     $('workbuddy-status').textContent = wb.loggedIn
       ? ('已登录' + (wb.nickname ? ('：' + wb.nickname) : '') + ' · 令牌到期 ' + fmtTime(wb.expiresAtMs) + ' · ' + wb.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（国际版账号）';
-    $('workbuddy-balance').textContent = (wb.balance != null) ? wb.balance : '—（本渠道不查询余额）';
+    $('workbuddy-balance').textContent = (wb.balance != null) ? wb.balance : '—';
 
     // LobsterAI / TRAE / MiniMax (native Bearer-token channels)
     var lb = snap.lobsterai || { loggedIn: false, models: [], nickname: '' };
@@ -157,14 +157,14 @@
     $('minimax-status').textContent = mm.loggedIn
       ? ('已登录 · 令牌到期 ' + fmtTime(mm.expiresAtMs) + ' · ' + mm.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（设备码授权）';
-    $('minimax-balance').textContent = (mm.balance != null) ? mm.balance : '—（本渠道不查询余额）';
+    $('minimax-balance').textContent = (mm.balance != null) ? mm.balance : '—';
     var cl = snap.cline || { loggedIn: false, models: [], nickname: '' };
     $('cline-models').textContent = cl.models.length;
     $('cline-probe-stat').textContent = probeStat(cl.models);
     $('cline-status').textContent = cl.loggedIn
       ? ('已登录' + (cl.nickname ? ('：' + cl.nickname) : '') + ' · 令牌到期 ' + fmtTime(cl.expiresAtMs) + ' · ' + cl.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（设备码授权，WorkOS flow）';
-    $('cline-balance').textContent = (cl.balance != null) ? cl.balance : '—（本渠道不查询余额）';
+    $('cline-balance').textContent = (cl.balance != null) ? cl.balance : '—';
     var qd = snap.qoder || { loggedIn: false, models: [] };
     var qc = snap.qodercn || { loggedIn: false, models: [] };
     var qst = (qd.loggedIn ? '国际版已登录' : '国际版未登录') + ' · ' + (qc.loggedIn ? '中国版已登录' : '中国版未登录')

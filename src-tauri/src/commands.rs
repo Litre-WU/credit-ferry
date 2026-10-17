@@ -1186,18 +1186,20 @@ pub async fn trae_login(ferry: FerryState<'_>) -> Result<Value, String> {
 /// MiniMax Code login: device-code flow — return the verification URL, poll in
 /// the background, persist when the user authorizes.
 async fn minimax_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
-    let (device_code, verify_url) = state
+    let (device_code, verify_url, code_verifier) = state
         .minimax
         .start_device_login()
         .await
         .map_err(|e| format!("minimax 发起登录失败：{}", e))?;
     open_in_browser(&verify_url);
     let bg = Arc::clone(state);
+    let dc = device_code.clone();
+    let cv = code_verifier.clone();
     tauri::async_runtime::spawn(async move {
         // Poll for a few minutes; the user authorizes in the browser meanwhile.
         for _ in 0..60 {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            if let Ok(creds) = bg.minimax.poll_device_token(&device_code).await {
+            if let Ok(creds) = bg.minimax.poll_device_token(&dc, &cv).await {
                 let mut store = bg.store.lock().await;
                 store.credentials.minimax = creds;
                 store.save_credentials();
