@@ -26,13 +26,14 @@ pub const REFRESH_PATH: &str = "/api/auth/refresh";
 pub const MODELS_PATH: &str = "/api/models/available";
 pub const CHAT_PATH: &str = "/api/proxy/v1/chat/completions";
 pub const CALLBACK_PATH: &str = "/auth/callback";
-/// 登录时 exchange 需要的 firstKeyfrom（客户端渠道标识）。有道文档未公开具体取值，
-/// 这里用与 authorize 的 `source=electron` 一致的占位值；若服务端对该字段做白名单校验，
-/// 需替换为官方桌面客户端实际使用的值。
-pub const FIRST_KEYFROM: &str = "credit-ferry-electron";
+/// 登录时 exchange 需要的 firstKeyfrom：模仿 OFM —— 取「登录会话创建时刻的毫秒时间戳」
+/// （见 business.mjs `createLobsteraiLoginSession`：`firstKeyfrom: String(nowMs)`），
+/// 与 latestKeyfrom（= exchange 时刻时间戳）配套，有道据此识别客户端版本/渠道。
+/// 调用方（commands.rs lobsterai_login_inner）按 OFM 方式传 `now_ms().to_string()`。
 pub const CLIENT_CAPABILITIES: &str = "kimi-k3-agentic-v1,thinking-level-control-v1";
 pub const FALLBACK_CLIENT_VERSION: &str = "2026.9.4";
-pub const UA: &str = "credit-ferry";
+/// 模仿 OFM `lobsteraiAnonymousHeaders` 的 User-Agent。
+pub const UA: &str = "LobsterAI/0.1.0";
 const TIMEOUT_MS: u64 = 30_000;
 
 /// 账号额度耗尽的文案（LobsterAI errors.ts 36118-36148 的 hard-credit 集）。
@@ -156,6 +157,13 @@ impl LobsterClient {
         if !status.is_success() {
             let m = value.get("message").and_then(|v| v.as_str()).unwrap_or("");
             return Err(format!("exchange HTTP {}: {}", status.as_u16(), m));
+        }
+        // 信封校验：模仿 OFM parseLobsteraiEnvelope —— code 必须为 0，否则取 msg/message。
+        let code = value.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        if code != 0 {
+            let m = value.get("msg").or_else(|| value.get("message"))
+                .and_then(|v| v.as_str()).unwrap_or("");
+            return Err(format!("exchange code {}: {}", code, m));
         }
         let data = value.get("data").unwrap_or(&value);
         let creds = parse_token_payload(data);

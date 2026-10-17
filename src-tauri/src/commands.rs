@@ -974,7 +974,8 @@ struct LobsterLoginCtx {
 #[derive(Clone)]
 struct TraeLoginCtx {
     state: Arc<AppState>,
-    redirect_uri: String,
+    machine_id: String,
+    device_id: String,
 }
 
 /// 通用成功/失败回显页（与 maodao 同款）。
@@ -1021,43 +1022,94 @@ async fn lobster_callback(
     native_login_reply(outcome)
 }
 
+/// 最小 percent-decode（%XX / +），用于解析 TRAE 回调用 URL 编码的 JSON 参数。
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16)?;
+            let lo = (bytes[i + 2] as char).to_digit(16)?;
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 async fn trae_callback(
     AxumState(ctx): AxumState<Arc<TraeLoginCtx>>,
     Query(params): Query<BTreeMap<String, String>>,
 ) -> (StatusCode, Html<String>) {
-    let outcome: Result<TokenCreds, String> = if let Some(error) = params.get("error") {
-        Err(params.get("error_description").cloned().unwrap_or_else(|| error.clone()))
-    } else if let Some(code) = params.get("code") {
-        match ctx.state.trae.exchange(code, &ctx.redirect_uri).await {
-            Ok(creds) => {
-                // 补账号信息（uid 供设备指纹派生）。失败也不阻塞：先落基础凭据。
-                let full = match ctx.state.trae.fetch_user_info(&creds).await {
-                    Ok(mut f) => {
-                        f.access_token = creds.access_token.clone();
-                        f.refresh_token = creds.refresh_token.clone();
-                        f.expires_at = creds.expires_at;
-                        f.extra = creds.extra.clone();
-                        f
-                    }
-                    Err(e) => {
-                        eprintln!("trae fetch_user_info 失败：{}", e);
-                        creds
-                    }
-                };
-                {
-                    let mut store = ctx.state.store.lock().await;
-                    store.credentials.trae = full.clone();
-                    store.credentials.keepalive.blocks.remove("trae");
-                    store.save_credentials();
-                }
-                let _ = generic_refresh_inner(&ctx.state, "trae").await;
-                Ok(full)
-            }
-            Err(e) => Err(e),
-        }
-    } else {
-        Err("回调缺少授权码".into())
+    // 模仿 OFM parseTraeCallbackDetailed：回调在 query 里回吐 refreshToken（或
+    // userJwt.RefreshToken）与 userInfo（UserID/ScreenName/TenantID）。
+    let parse_json = |raw: &str| -> Option<serde_json::Value> {
+        let s = raw.trim();
+        if s.is_empty() { return None; }
+        serde_json::from_str::<serde_json::Value>(s).ok()
+            .or_else(|| percent_decode(s).and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok()))
     };
+    let user_info = params.get("userInfo").and_then(|v| parse_json(v));
+    let user_jwt = params.get("userJwt").and_then(|v| parse_json(v));
+    let refresh_token = params.get("refreshToken").cloned().filter(|s| !s.is_empty())
+        .or_else(|| user_jwt.as_ref()
+            .and_then(|j| j.get("RefreshToken").or_else(|| j.get("refreshToken")))
+            .and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default();
+    let access_token_direct = if refresh_token.is_empty() {
+        user_jwt.as_ref()
+            .and_then(|j| j.get("Token").or_else(|| j.get("token")).or_else(|| j.get("accessToken")))
+            .and_then(|v| v.as_str()).unwrap_or("").to_string()
+    } else { String::new() };
+    let (cb_uid, cb_nick, cb_ent) = user_info.as_ref().map(|u| {
+        let g = |k: &str| u.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        (g("UserID"), g("ScreenName"), g("TenantID"))
+    }).unwrap_or_default();
+    let has_code = params.get("code").or_else(|| params.get("authCode"))
+        .or_else(|| params.get("authCodeInfo")).map(|s| !s.is_empty()).unwrap_or(false);
+
+    let outcome: Result<TokenCreds, String> = async {
+        let mut creds = if !refresh_token.is_empty() {
+            ctx.state.trae.exchange(&refresh_token).await?
+        } else if !access_token_direct.is_empty() {
+            TokenCreds { access_token: access_token_direct, refresh_token: String::new(), expires_at: 0, ..Default::default() }
+        } else if has_code {
+            return Err("TRAE 返回了 PKCE 授权码（本实现暂不支持该流程）；请确认授权页是否为新版".into());
+        } else {
+            return Err("回调未携带 refreshToken / userJwt.Token / code".into());
+        };
+        // userInfo 里的 uid/nickname 覆盖（ExchangeToken 不返回账号信息）。
+        if !cb_uid.is_empty() { creds.uid = cb_uid.clone(); }
+        if !cb_nick.is_empty() { creds.nickname = cb_nick.clone(); }
+        // 存设备标识，供 chat 头 X-Machine-Id / X-Device-Id 使用。
+        creds.extra["machineId"] = json!(ctx.machine_id.clone());
+        creds.extra["deviceId"] = json!(ctx.device_id.clone());
+        if !cb_ent.is_empty() { creds.extra["enterprise_id"] = json!(cb_ent); }
+        // 补 GetUserInfo（NonPlainTextMobile/Email + 确认 uid）。失败不阻塞。
+        match ctx.state.trae.fetch_user_info(&creds).await {
+            Ok(f) => {
+                creds.uid = if f.uid.is_empty() { creds.uid.clone() } else { f.uid };
+                creds.nickname = if f.nickname.is_empty() { creds.nickname.clone() } else { f.nickname };
+                creds.extra = f.extra;
+            }
+            Err(e) => { eprintln!("trae fetch_user_info 失败：{}", e); }
+        }
+        {
+            let mut store = ctx.state.store.lock().await;
+            store.credentials.trae = creds.clone();
+            store.credentials.keepalive.blocks.remove("trae");
+            store.save_credentials();
+        }
+        let _ = generic_refresh_inner(&ctx.state, "trae").await;
+        Ok(creds)
+    }.await;
     native_login_reply(outcome)
 }
 
@@ -1068,7 +1120,8 @@ async fn lobsterai_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
         .map_err(|e| format!("无法监听本地回调端口：{}", e))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let uuid = crate::store::new_hex(32);
-    let first_keyfrom = crate::lobsterai::FIRST_KEYFROM.to_string();
+    // 模仿 OFM：firstKeyfrom = 登录会话创建时刻的毫秒时间戳（lobsrateai 用它识别渠道/版本）。
+    let first_keyfrom = crate::store::now_ms().to_string();
     let state_param = crate::store::new_hex(16);
     let url = crate::lobsterai::login_url(port, &state_param);
     open_in_browser(&url);
@@ -1090,20 +1143,22 @@ async fn lobsterai_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
     Ok(json!({ "authUrl": url }))
 }
 
-/// TRAE 浏览器登录：启动临时 loopback + 打开登录页（PKCE），回调后自动换令牌、补账号、落地、拉目录。
+/// TRAE 浏览器登录：启动临时 loopback + 打开登录页（无 PKCE，走 machine_id/device_id 原生 IDE 授权），
+/// 回调后自动换令牌、补账号、落地、拉目录。
 async fn trae_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .map_err(|e| format!("无法监听本地回调端口：{}", e))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let state_param = crate::store::new_hex(16);
-    let code_verifier = crate::store::new_hex(64);
-    let redirect_uri = format!("http://127.0.0.1:{}{}", port, crate::trae::CALLBACK_PATH);
-    let url = crate::trae::login_url(port, &state_param, &code_verifier);
+    // 模仿 OFM generateMachineId / generateDeviceId：每次登录随机生成 32-hex 设备标识。
+    let machine_id = crate::store::new_hex(16);
+    let device_id = crate::store::new_hex(16);
+    let url = crate::trae::login_url(port, &machine_id, &device_id);
     open_in_browser(&url);
     let ctx = Arc::new(TraeLoginCtx {
         state: Arc::clone(state),
-        redirect_uri,
+        machine_id,
+        device_id,
     });
     tauri::async_runtime::spawn(async move {
         let app = Router::new()
