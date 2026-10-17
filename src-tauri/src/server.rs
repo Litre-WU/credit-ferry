@@ -987,12 +987,14 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "nickname": store.credentials.buddy.buddy.nickname,
             "expiresAtMs": store.credentials.buddy.buddy.expires_at,
             "models": buddy_models,
+            "balance": Value::Null,
         },
         "workbuddy": {
             "loggedIn": store.credentials.buddy.workbuddy.ready(),
             "nickname": store.credentials.buddy.workbuddy.nickname,
             "expiresAtMs": store.credentials.buddy.workbuddy.expires_at,
             "models": workbuddy_models,
+            "balance": Value::Null,
         },
         "lobsterai": {
             "loggedIn": store.credentials.lobsterai.ready(),
@@ -1010,12 +1012,14 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "loggedIn": store.credentials.minimax.ready(),
             "expiresAtMs": store.credentials.minimax.expires_at,
             "models": minimax_models,
+            "balance": Value::Null,
         },
         "cline": {
             "loggedIn": store.credentials.cline.ready(),
             "nickname": store.credentials.cline.nickname,
             "expiresAtMs": store.credentials.cline.expires_at,
             "models": cline_models,
+            "balance": Value::Null,
         },
         "qoder": {
             "loggedIn": store.credentials.qoder.ready(),

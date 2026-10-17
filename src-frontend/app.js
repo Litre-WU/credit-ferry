@@ -129,12 +129,14 @@
     $('buddy-status').textContent = bd.loggedIn
       ? ('已登录' + (bd.nickname ? ('：' + bd.nickname) : '') + ' · 令牌到期 ' + fmtTime(bd.expiresAtMs) + ' · ' + bd.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（自动打开官方登录页，完成后自动拉取目录）';
+    $('buddy-balance').textContent = (bd.balance != null) ? bd.balance : '—（本渠道不查询余额）';
     var wb = snap.workbuddy || { loggedIn: false, models: [], nickname: '' };
     $('workbuddy-models').textContent = wb.models.length;
     $('workbuddy-probe-stat').textContent = probeStat(wb.models);
     $('workbuddy-status').textContent = wb.loggedIn
       ? ('已登录' + (wb.nickname ? ('：' + wb.nickname) : '') + ' · 令牌到期 ' + fmtTime(wb.expiresAtMs) + ' · ' + wb.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（国际版账号）';
+    $('workbuddy-balance').textContent = (wb.balance != null) ? wb.balance : '—（本渠道不查询余额）';
 
     // LobsterAI / TRAE / MiniMax (native Bearer-token channels)
     var lb = snap.lobsterai || { loggedIn: false, models: [], nickname: '' };
@@ -155,12 +157,14 @@
     $('minimax-status').textContent = mm.loggedIn
       ? ('已登录 · 令牌到期 ' + fmtTime(mm.expiresAtMs) + ' · ' + mm.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（设备码授权）';
+    $('minimax-balance').textContent = (mm.balance != null) ? mm.balance : '—（本渠道不查询余额）';
     var cl = snap.cline || { loggedIn: false, models: [], nickname: '' };
     $('cline-models').textContent = cl.models.length;
     $('cline-probe-stat').textContent = probeStat(cl.models);
     $('cline-status').textContent = cl.loggedIn
       ? ('已登录' + (cl.nickname ? ('：' + cl.nickname) : '') + ' · 令牌到期 ' + fmtTime(cl.expiresAtMs) + ' · ' + cl.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（设备码授权，WorkOS flow）';
+    $('cline-balance').textContent = (cl.balance != null) ? cl.balance : '—（本渠道不查询余额）';
     var qd = snap.qoder || { loggedIn: false, models: [] };
     var qc = snap.qodercn || { loggedIn: false, models: [] };
     var qst = (qd.loggedIn ? '国际版已登录' : '国际版未登录') + ' · ' + (qc.loggedIn ? '中国版已登录' : '中国版未登录')
@@ -458,25 +462,58 @@
     });
   });
 
-  // ---- Buddy family (native OAuth login + refresh + probe) ----
+  // ---- Buddy family (native OAuth/login + refresh + probe) ----
+  function ensureLoginHint(source) {
+    var id = 'login-hint-' + source;
+    var el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.className = 'muted hidden';
+      el.style.marginTop = '6px';
+      var st = document.getElementById(source + '-status');
+      if (st && st.parentNode) st.parentNode.insertBefore(el, st);
+    }
+    return el;
+  }
   function buddyLogin(source, btn) {
     var cmd = source === 'workbuddy' ? 'workbuddy_login' : (source === 'minimax' ? 'minimax_login' : (source === 'cline' ? 'cline_login' : (source === 'qoder' ? 'qoder_login' : (source === 'qodercn' ? 'qodercn_login' : 'buddy_login'))));
-    btn.disabled = true;
-    btn.textContent = '打开登录页…';
-    invoke(cmd).then(function () {
-      btn.disabled = false;
-      btn.textContent = '浏览器登录';
-      toast('已打开官方登录页，请在浏览器完成登录后等待目录自动加载');
-      // poll a few times so the background login poller has time to land
-      var tries = 0;
+    if (btn) { btn.disabled = true; btn.textContent = '打开登录页…'; }
+    invoke(cmd).then(function (r) {
+      if (btn) { btn.disabled = false; btn.textContent = '浏览器登录'; }
+      var authUrl = (r && r.authUrl) || '';
+      var userCode = (r && r.userCode) || '';
+      var hint = ensureLoginHint(source);
+      hint.classList.remove('hidden');
+      var waited = 0;
+      function showHint() {
+        var msg = '请在浏览器中完成授权…（已等待 ' + Math.round(waited) + 's / 最多 300s）';
+        if (userCode) msg += ' · 设备码 <b>' + userCode + '</b>';
+        if (authUrl) msg += ' · 若未自动打开可手动访问：<a href="' + authUrl + '" target="_blank" rel="noopener">' + authUrl + '</a>';
+        hint.innerHTML = msg;
+      }
+      showHint();
       var iv = setInterval(function () {
-        tries++;
-        refresh();
-        if (tries > 10) clearInterval(iv);
+        waited += 1.5;
+        invoke('get_snapshot').then(function (s) {
+          render(s);
+          var ch = s[source] || {};
+          if (ch.loggedIn) {
+            clearInterval(iv);
+            hint.classList.add('hidden');
+            var label = (source === 'qoder') ? 'Qoder 国际版' : (source === 'qodercn') ? 'Qoder 中国版' : source;
+            toast(label + ' 登录成功' + ((r && r.gated) ? '（推理受 WASM 限制，模型仅供查看）' : ''));
+            refresh();
+          } else if (waited >= 300) {
+            clearInterval(iv);
+            hint.innerHTML = '登录超时：未在 5 分钟内完成浏览器授权。请重新点「浏览器登录」，并在打开的页面里完成授权。';
+          } else {
+            showHint();
+          }
+        }).catch(function () {});
       }, 1500);
     }).catch(function (e) {
-      btn.disabled = false;
-      btn.textContent = '浏览器登录';
+      if (btn) { btn.disabled = false; btn.textContent = '浏览器登录'; }
       toast(e);
     });
   }
