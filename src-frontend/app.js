@@ -144,13 +144,13 @@
     $('lobsterai-probe-stat').textContent = probeStat(lb.models);
     $('lobsterai-status').textContent = lb.loggedIn
       ? ('已登录' + (lb.nickname ? ('：' + lb.nickname) : '') + ' · 令牌到期 ' + fmtTime(lb.expiresAtMs) + ' · ' + lb.models.length + ' 个模型')
-      : '未登录 — 需先在 LobsterAI 官方客户端/网页登录后导入令牌';
+      : '未登录 — 点「浏览器登录」（自动打开有道登录页，完成后自动拉取目录）';
     var tr = snap.trae || { loggedIn: false, models: [], nickname: '' };
     $('trae-models').textContent = tr.models.length;
     $('trae-probe-stat').textContent = probeStat(tr.models);
     $('trae-status').textContent = tr.loggedIn
       ? ('已登录' + (tr.nickname ? ('：' + tr.nickname) : '') + ' · 令牌到期 ' + fmtTime(tr.expiresAtMs) + ' · ' + tr.models.length + ' 个模型')
-      : '未登录 — 需先在 TRAE 官方客户端/网页登录后导入令牌';
+      : '未登录 — 点「浏览器登录」（自动打开 TRAE 登录页，完成后自动拉取目录）';
     var mm = snap.minimax || { loggedIn: false, models: [] };
     $('minimax-models').textContent = mm.models.length;
     $('minimax-probe-stat').textContent = probeStat(mm.models);
@@ -477,7 +477,14 @@
     return el;
   }
   function buddyLogin(source, btn) {
-    var cmd = source === 'workbuddy' ? 'workbuddy_login' : (source === 'minimax' ? 'minimax_login' : (source === 'cline' ? 'cline_login' : (source === 'qoder' ? 'qoder_login' : (source === 'qodercn' ? 'qodercn_login' : 'buddy_login'))));
+    var cmd = source === 'workbuddy' ? 'workbuddy_login'
+      : source === 'minimax' ? 'minimax_login'
+      : source === 'cline' ? 'cline_login'
+      : source === 'qoder' ? 'qoder_login'
+      : source === 'qodercn' ? 'qodercn_login'
+      : source === 'lobsterai' ? 'lobsterai_login'
+      : source === 'trae' ? 'trae_login'
+      : 'buddy_login';
     if (btn) { btn.disabled = true; btn.textContent = '打开登录页…'; }
     invoke(cmd).then(function (r) {
       if (btn) { btn.disabled = false; btn.textContent = '浏览器登录'; }
@@ -556,8 +563,10 @@
   }
   $('btn-lobsterai-refresh').addEventListener('click', function () { genericRefresh('lobsterai', this); });
   $('btn-lobsterai-probe').addEventListener('click', function () { probeClick('lobsterai', this); });
+  $('btn-lobsterai-login').addEventListener('click', function () { buddyLogin('lobsterai', this); });
   $('btn-trae-refresh').addEventListener('click', function () { genericRefresh('trae', this); });
   $('btn-trae-probe').addEventListener('click', function () { probeClick('trae', this); });
+  $('btn-trae-login').addEventListener('click', function () { buddyLogin('trae', this); });
   $('btn-minimax-refresh').addEventListener('click', function () { genericRefresh('minimax', this); });
   $('btn-minimax-probe').addEventListener('click', function () { probeClick('minimax', this); });
   $('btn-minimax-login').addEventListener('click', function () { buddyLogin('minimax', this); });

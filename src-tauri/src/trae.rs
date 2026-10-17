@@ -19,6 +19,7 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
 use reqwest::Client;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -34,6 +35,11 @@ pub const APP_ID: &str = "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8";
 pub const IDE_VERSION: &str = "0.1.52";
 pub const BATCH_MODELS_PATH: &str = "/api/ide/v1/batch_get_detail_param";
 pub const EXCHANGE_PATH: &str = "/cloudide/api/v3/trae/oauth/ExchangeToken";
+/// OAuth 授权端点（仅协议逆向推断：exchange 在 {OAUTH_HOST}/cloudide/api/v3/trae/oauth/ExchangeToken，
+/// 对称地授权也应在同一 host 的 …/oauth/authorize；若实际路径不同，改这里即可）。
+pub const AUTH_AUTHORIZE_PATH: &str = "/cloudide/api/v3/trae/oauth/authorize";
+/// 本地回调路径（与 lobsterai 共用同一 loopback 约定）。
+pub const CALLBACK_PATH: &str = "/auth/callback";
 pub const USER_INFO_PATH: &str = "/cloudide/api/v3/trae/GetUserInfo";
 pub const CHECKIN_STATUS_PATH: &str = "/trae/api/v2/ug/checkin_credits/status";
 pub const CHECKIN_CLAIM_PATH: &str = "/trae/api/v2/ug/checkin_credits/claim";
@@ -91,6 +97,33 @@ pub fn derive_rotating_machine_id(base: &str, generation: u64) -> String {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Percent-encode a string for use inside a query parameter value.
+fn pct(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' =>
+                out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// Build the browser login URL (OAuth loopback + PKCE S256). The provider
+/// redirects back to `http://127.0.0.1:{port}/auth/callback?code=…` after the
+/// user authorises. `code_verifier` is the PKCE verifier the authorize step is
+/// bound to (TRAE's ExchangeToken does not take it back — it is bound server-side).
+pub fn login_url(port: u16, state: &str, code_verifier: &str) -> String {
+    let digest = Sha256::digest(code_verifier.as_bytes());
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+    let redirect = pct(&format!("http://127.0.0.1:{}{}", port, CALLBACK_PATH));
+    format!(
+        "{}{}?response_type=code&client_id={}&redirect_uri={}&state={}&auth_from=trae&code_challenge={}&code_challenge_method=S256",
+        OAUTH_HOST, AUTH_AUTHORIZE_PATH, APP_ID, redirect, state, challenge
+    )
 }
 
 /// 分类 TRAE 错误：返回 QUOTA / RATE / OTHER（供换号与限流记账）。

@@ -26,6 +26,10 @@ pub const REFRESH_PATH: &str = "/api/auth/refresh";
 pub const MODELS_PATH: &str = "/api/models/available";
 pub const CHAT_PATH: &str = "/api/proxy/v1/chat/completions";
 pub const CALLBACK_PATH: &str = "/auth/callback";
+/// 登录时 exchange 需要的 firstKeyfrom（客户端渠道标识）。有道文档未公开具体取值，
+/// 这里用与 authorize 的 `source=electron` 一致的占位值；若服务端对该字段做白名单校验，
+/// 需替换为官方桌面客户端实际使用的值。
+pub const FIRST_KEYFROM: &str = "credit-ferry-electron";
 pub const CLIENT_CAPABILITIES: &str = "kimi-k3-agentic-v1,thinking-level-control-v1";
 pub const FALLBACK_CLIENT_VERSION: &str = "2026.9.4";
 pub const UA: &str = "credit-ferry";
@@ -68,6 +72,29 @@ pub fn parse_token_payload(data: &Value) -> TokenCreds {
         nickname: get_str(&user, "nickname"),
         ..Default::default()
     }
+}
+
+/// Percent-encode a string for use inside a query parameter value.
+pub fn pct(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' =>
+                out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// Build the browser login URL (OAuth loopback). The provider redirects back to
+/// `http://127.0.0.1:{port}/auth/callback?code=…` after the user authorises.
+pub fn login_url(port: u16, state: &str) -> String {
+    let redirect = pct(&format!("http://127.0.0.1:{}{}", port, CALLBACK_PATH));
+    format!(
+        "{}#/login?source=electron&redirect_uri={}&state={}",
+        PORTAL_BASE, redirect, state
+    )
 }
 
 /// 目录行 → ModelEntry。
