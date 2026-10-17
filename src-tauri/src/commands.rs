@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::extract::{Query, State as AxumState};
 use axum::response::Html;
-use axum::routing::get as axum_get;
+use axum::routing::{get as axum_get, post as axum_post};
 use axum::{http::StatusCode, Router};
 use qrcode::render::svg;
 use qrcode::QrCode;
@@ -234,6 +234,355 @@ pub async fn opencode_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
 }
 
 // ---------------------------------------------------------------- loomy
+
+/// 微信扫码登录上下文（一次性 loopback 登录窗口共享状态）。
+struct LoomyWechatCtx {
+    state: Arc<AppState>,
+    uuid: Mutex<Option<String>>,
+    last_errcode: Mutex<String>,
+    rcode: Mutex<Option<String>>,
+    msgid: Mutex<Option<String>>,
+    done: Mutex<bool>,
+}
+
+/// Loomy 的 loopback 登录：`GET /wechat/qr` 展示二维码，前端 `/wechat/poll`
+/// 轮询扫码状态，确认后自动换会话并落盘；首次扫码的新微信走
+/// `/wechat/complete` 短信绑定。
+async fn loomy_wechat_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .map_err(|e| format!("无法监听本地回调端口：{}", e))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let ctx = Arc::new(LoomyWechatCtx {
+        state: Arc::clone(state),
+        uuid: Mutex::new(None),
+        last_errcode: Mutex::new(String::new()),
+        rcode: Mutex::new(None),
+        msgid: Mutex::new(None),
+        done: Mutex::new(false),
+    });
+    let url = format!("http://127.0.0.1:{}{}", port, crate::loomy::WECHAT_QR_PATH);
+    open_in_browser(&url);
+    tauri::async_runtime::spawn(async move {
+        let app = Router::new()
+            .route(crate::loomy::WECHAT_QR_PATH, axum_get(loomy_qr_page))
+            .route(crate::loomy::WECHAT_POLL_PATH, axum_get(loomy_poll))
+            .route(crate::loomy::WECHAT_COMPLETE_PATH, axum_post(loomy_complete))
+            .with_state(ctx);
+        let server = axum::serve(listener, app);
+        tokio::select! {
+            _ = server => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(crate::loomy::WECHAT_LOGIN_TIMEOUT_MS)) => {}
+        }
+    });
+    Ok(json!({ "authUrl": url, "mode": "wechat_qr" }))
+}
+
+#[tauri::command]
+pub async fn loomy_wechat_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    loomy_wechat_login_inner(&ferry.state).await
+}
+
+/// 确保已拿到二维码 uuid（首次调用时才去微信开放平台拉授权页）。
+async fn ensure_loomy_uuid(ctx: &LoomyWechatCtx) -> Result<String, String> {
+    let mut guard = ctx.uuid.lock().await;
+    if let Some(existing) = guard.as_ref() {
+        return Ok(existing.clone());
+    }
+    let http = crate::loomy::wechat_client();
+    let uuid = crate::loomy::fetch_wechat_uuid(&http).await?;
+    *guard = Some(uuid.clone());
+    Ok(uuid)
+}
+
+/// 把登录成功的会话写进凭据文件并设为当前会话。
+async fn persist_loomy_login(ctx: &LoomyWechatCtx, login: crate::loomy::LoomyLogin) {
+    let expires_at_ms = crate::store::now_ms() + crate::loomy::SESSION_TTL_SECONDS * 1000;
+    let name = if login.phone.is_empty() {
+        format!("wx-{}", &login.userid.chars().rev().take(4).collect::<String>())
+    } else {
+        format!("wx-{}", login.phone.chars().rev().take(4).collect::<String>())
+    };
+    let mut store = ctx.state.store.lock().await;
+    let sessions = &mut store.credentials.loomy.sessions;
+    if let Some(existing) = sessions.iter_mut().find(|s| s.session == login.session) {
+        existing.userid = login.userid.clone();
+        existing.phone = login.phone.clone();
+        existing.expires_at_ms = expires_at_ms;
+    } else {
+        sessions.push(crate::store::LoomySession {
+            name: name.clone(),
+            session: login.session.clone(),
+            userid: login.userid.clone(),
+            phone: login.phone.clone(),
+            expires_at_ms,
+            source: "wechat".into(),
+        });
+    }
+    store.credentials.loomy.active = Some(name);
+    store.save_credentials();
+}
+
+/// 二维码展示页：内嵌微信二维码图片 + 前端轮询脚本。
+async fn loomy_qr_page(
+    AxumState(ctx): AxumState<Arc<LoomyWechatCtx>>,
+) -> (StatusCode, Html<String>) {
+    if *ctx.done.lock().await {
+        return (StatusCode::OK, Html(login_done_page()));
+    }
+    let uuid = match ensure_loomy_uuid(&ctx).await {
+        Ok(u) => u,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Html(format!(
+                    r#"<!doctype html><meta charset="utf-8"><title>二维码获取失败</title>
+<body style="font-family:system-ui;padding:48px;text-align:center">
+<h1>二维码获取失败</h1><p>{}</p><p><a href="/wechat/qr">重试</a></p>"#,
+                    e.replace('<', "&lt;")
+                )),
+            )
+        }
+    };
+    let http = crate::loomy::wechat_client();
+    let data_url = match crate::loomy::fetch_wechat_qr_data_url(&http, &uuid).await {
+        Ok(u) => u,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Html(format!(
+                    r#"<!doctype html><meta charset="utf-8"><title>二维码下载失败</title>
+<body style="font-family:system-ui;padding:48px;text-align:center">
+<h1>二维码下载失败</h1><p>{}</p><p><a href="/wechat/qr">重试</a></p>"#,
+                    e.replace('<', "&lt;")
+                )),
+            )
+        }
+    };
+    (StatusCode::OK, Html(qr_page(&data_url)))
+}
+
+/// 轮询扫码状态；确认后自动换会话 + 落盘。
+async fn loomy_poll(AxumState(ctx): AxumState<Arc<LoomyWechatCtx>>) -> axum::Json<Value> {
+    if *ctx.done.lock().await {
+        return axum::Json(json!({ "status": "confirmed" }));
+    }
+    let uuid = match ensure_loomy_uuid(&ctx).await {
+        Ok(u) => u,
+        Err(e) => return axum::Json(json!({ "status": "error", "message": e })),
+    };
+    let last = ctx.last_errcode.lock().await.clone();
+    let http = crate::loomy::wechat_client();
+    let polled = crate::loomy::poll_wechat_once(&http, &uuid, &last).await;
+    if !polled.errcode.is_empty() {
+        *ctx.last_errcode.lock().await = polled.errcode.clone();
+    }
+    match polled.status {
+        crate::loomy::WechatPollStatus::Confirmed => {
+            match crate::loomy::bind_third_account(&http, &polled.code).await {
+                Ok(record) => {
+                    let rcode = record.get("rcode").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let bind = record.get("bind").and_then(|v| v.as_i64()).unwrap_or(0);
+                    if rcode.is_empty() {
+                        return axum::Json(json!({ "status": "error", "message": "Loomy 绑定响应缺少 rcode" }));
+                    }
+                    if bind == 1 {
+                        match crate::loomy::bind_skip(&http, &rcode).await {
+                            Ok(login) => {
+                                persist_loomy_login(&ctx, login).await;
+                                *ctx.done.lock().await = true;
+                                axum::Json(json!({ "status": "confirmed" }))
+                            }
+                            Err(e) => axum::Json(json!({ "status": "error", "message": e })),
+                        }
+                    } else {
+                        // 首次扫码的新微信：需要绑定手机号才能拿到会话。
+                        *ctx.rcode.lock().await = Some(rcode);
+                        axum::Json(json!({ "status": "need_phone" }))
+                    }
+                }
+                Err(e) => axum::Json(json!({ "status": "error", "message": e })),
+            }
+        }
+        crate::loomy::WechatPollStatus::Expired => {
+            // 清空 uuid，下次进入 /wechat/qr 会重新拉一张。
+            *ctx.uuid.lock().await = None;
+            *ctx.last_errcode.lock().await = String::new();
+            axum::Json(json!({ "status": "expired" }))
+        }
+        other => axum::Json(json!({ "status": other.as_str() })),
+    }
+}
+
+/// 短信绑定手机号（send_sms / verify_sms）。
+async fn loomy_complete(
+    AxumState(ctx): AxumState<Arc<LoomyWechatCtx>>,
+    axum::Json(payload): axum::Json<Value>,
+) -> axum::Json<Value> {
+    let action = payload.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let phone = payload
+        .get("phone")
+        .map(|v| v.to_string().trim_matches('"').to_string())
+        .unwrap_or_default();
+    let code = payload
+        .get("code")
+        .map(|v| v.to_string().trim_matches('"').to_string())
+        .unwrap_or_default();
+    let http = crate::loomy::wechat_client();
+    match action {
+        "send_sms" => {
+            let Some(rcode) = ctx.rcode.lock().await.clone() else {
+                return axum::Json(json!({ "ok": false, "message": "当前没有待绑定的扫码会话" }));
+            };
+            match crate::loomy::bind_send_msg(&http, &rcode, &phone).await {
+                Ok(msgid) => {
+                    *ctx.msgid.lock().await = Some(msgid);
+                    axum::Json(json!({ "ok": true }))
+                }
+                Err(e) => axum::Json(json!({ "ok": false, "message": e })),
+            }
+        }
+        "verify_sms" => {
+            let (rcode, msgid) = {
+                let g1 = ctx.rcode.lock().await;
+                let g2 = ctx.msgid.lock().await;
+                (g1.clone(), g2.clone())
+            };
+            let (Some(rcode), Some(msgid)) = (rcode, msgid) else {
+                return axum::Json(json!({ "ok": false, "message": "请先获取短信验证码" }));
+            };
+            match crate::loomy::bind_check_code(&http, &rcode, &code, &msgid).await {
+                Ok(login) => {
+                    persist_loomy_login(&ctx, login).await;
+                    *ctx.done.lock().await = true;
+                    axum::Json(json!({ "ok": true, "done": true }))
+                }
+                Err(e) => axum::Json(json!({ "ok": false, "message": e })),
+            }
+        }
+        _ => axum::Json(json!({ "ok": false, "message": format!("未知 action: {}", action) })),
+    }
+}
+
+fn qr_page(data_url: &str) -> String {
+    format!(
+        r#"<!doctype html><meta charset="utf-8"><title>Loomy 微信扫码登录</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+         background:#f5f6f8; color:#1f2329; }}
+  .card {{ background:#fff; border-radius:12px; padding:28px 32px; box-shadow:0 4px 24px rgba(0,0,0,.08);
+          text-align:center; width:320px; }}
+  h1 {{ font-size:17px; margin:0 0 4px; font-weight:600; }}
+  .sub {{ font-size:13px; color:#8a9099; margin-bottom:18px; }}
+  .qr {{ width:220px; height:220px; display:block; margin:0 auto; border:1px solid #eceef1; border-radius:8px; }}
+  .status {{ margin-top:16px; font-size:13px; color:#4e5969; min-height:20px; }}
+  .status[data-tone="ok"] {{ color:#0f9d58; font-weight:600; }}
+  .status[data-tone="err"] {{ color:#d93026; }}
+  .form {{ display:none; margin-top:18px; text-align:left; }}
+  .form[data-show="1"] {{ display:block; }}
+  label {{ display:block; font-size:12px; color:#8a9099; margin-bottom:4px; }}
+  input {{ width:100%; box-sizing:border-box; padding:8px 10px; font-size:14px; margin-bottom:10px;
+          border:1px solid #d9dde3; border-radius:6px; }}
+  button {{ width:100%; padding:9px; font-size:14px; border:0; border-radius:6px;
+           background:#07c160; color:#fff; cursor:pointer; }}
+  button:disabled {{ background:#c9cdd4; cursor:not-allowed; }}
+  button.ghost {{ background:#f2f3f5; color:#1f2329; margin-top:8px; }}
+  .row {{ display:flex; gap:8px; }}
+</style>
+<body>
+  <div class="card">
+    <h1>Loomy 微信扫码登录</h1>
+    <div class="sub">请使用微信扫描下方二维码</div>
+    <img class="qr" src="{data_url}" alt="微信二维码"/>
+    <div class="status" id="status">等待扫码…</div>
+    <div class="form" id="form" data-show="0">
+      <label for="phone">手机号（中国大陆 +86）</label>
+      <div class="row">
+        <input id="phone" placeholder="请输入手机号"/>
+        <button id="send" type="button">发送验证码</button>
+      </div>
+      <label for="code">短信验证码</label>
+      <div class="row">
+        <input id="code" placeholder="请输入验证码"/>
+        <button id="verify" type="button">完成绑定</button>
+      </div>
+    </div>
+  </div>
+<script>
+  const statusEl = document.getElementById('status');
+  const formEl = document.getElementById('form');
+  const phoneEl = document.getElementById('phone');
+  const codeEl = document.getElementById('code');
+  const sendEl = document.getElementById('send');
+  const verifyEl = document.getElementById('verify');
+  let stopped = false;
+  function setStatus(text, tone) {{
+    statusEl.textContent = text;
+    if (tone) statusEl.dataset.tone = tone; else delete statusEl.dataset.tone;
+  }}
+  sendEl.addEventListener('click', async () => {{
+    const phone = phoneEl.value.trim();
+    if (phone.length === 0) return;
+    sendEl.disabled = true;
+    try {{
+      const r = await fetch('/wechat/complete', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ action: 'send_sms', phone }})
+      }});
+      const j = await r.json();
+      if (j.ok) setStatus('验证码已发送，请输入短信验证码', 'ok');
+      else {{ setStatus(j.message || '发送失败', 'err'); sendEl.disabled = false; }}
+    }} catch (e) {{ setStatus(String(e), 'err'); sendEl.disabled = false; }}
+  }});
+  verifyEl.addEventListener('click', async () => {{
+    const code = codeEl.value.trim();
+    if (code.length === 0) return;
+    verifyEl.disabled = true;
+    try {{
+      const r = await fetch('/wechat/complete', {{
+        method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ action: 'verify_sms', phone: phoneEl.value.trim(), code }})
+      }});
+      const j = await r.json();
+      if (j.ok && j.done) {{
+        setStatus('登录成功，可以关闭这个页面了', 'ok');
+        stopped = true;
+      }} else {{ setStatus(j.message || '验证失败', 'err'); verifyEl.disabled = false; }}
+    }} catch (e) {{ setStatus(String(e), 'err'); verifyEl.disabled = false; }}
+  }});
+  async function tick() {{
+    if (stopped) return;
+    try {{
+      const r = await fetch('/wechat/poll');
+      const j = await r.json();
+      if (j.status === 'waiting') setStatus('等待扫码…');
+      else if (j.status === 'scanned') setStatus('已扫码，请在微信中确认');
+      else if (j.status === 'confirmed') {{ setStatus('登录成功，可以关闭这个页面了', 'ok'); stopped = true; }}
+      else if (j.status === 'need_phone') {{
+        setStatus('该微信尚未绑定手机号，请完成绑定', 'err');
+        formEl.dataset.show = '1';
+      }}
+      else if (j.status === 'expired') setStatus('二维码已失效，正在刷新…', 'err');
+      else if (j.status === 'cancelled') {{ setStatus('已取消扫码', 'err'); stopped = true; }}
+      else setStatus(j.message || '未知状态', 'err');
+    }} catch (e) {{
+      setStatus('轮询异常：' + String(e), 'err');
+    }}
+    if (!stopped) setTimeout(tick, 1500);
+  }}
+  tick();
+</script>"#
+    )
+}
+
+fn login_done_page() -> String {
+    r#"<!doctype html><meta charset="utf-8"><title>登录成功</title>
+<body style="font-family:system-ui;padding:48px;text-align:center">
+<h1>登录成功</h1><p>可以关闭这个页面，回到 CreditFerry 面板。</p>"#
+        .to_string()
+}
 
 /// Scan the installed Loomy desktop client for sessions (read-only).
 #[tauri::command]

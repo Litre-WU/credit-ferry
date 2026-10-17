@@ -88,9 +88,10 @@
     <!-- Loomy -->
     <div class="card">
       <h2><span class="badge loomy">Loomy</span> 讯飞 Loomy（积分模型）</h2>
-      <div class="desc">默认走桌面客户端登录态（只读扫描 <span class="endpoint">C:\Users\Public\Loomy\*\userData\auth-session.json</span>），也可手动粘贴会话。会话有效期 14 天。</div>
+      <div class="desc">推荐用<b>微信扫码登录</b>；也可走桌面客户端登录态（只读扫描 <span class="endpoint">C:\Users\Public\Loomy\*\userData\auth-session.json</span>）或手动粘贴会话。会话有效期 14 天。</div>
       <div class="row">
-        <button class="primary" id="btn-loomy-import">扫描本机客户端</button>
+        <button class="primary" id="btn-loomy-wechat">微信扫码登录</button>
+        <button id="btn-loomy-import">扫描本机客户端</button>
         <button id="btn-loomy-refresh">刷新模型与余额</button>
         <button id="btn-loomy-probe">验证可调用性</button>
         <span class="stat"><b id="loomy-balance">—</b><span>积分余额</span></span>

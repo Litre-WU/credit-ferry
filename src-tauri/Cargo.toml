@@ -21,6 +21,9 @@ bytes = "1"
 tar = "0.4"
 flate2 = "1"
 sha2 = "0.10"
+# Loomy 账号网关签名：HMAC-SHA1 + body MD5（见 business.mjs loomyAuthHeaders）。
+sha1 = "0.10"
+md-5 = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 base64 = "0.22"
 aes-gcm = "0.10"

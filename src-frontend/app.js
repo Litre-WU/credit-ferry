@@ -271,6 +271,22 @@
 
   // ------------------------------------------------------------- actions
 
+  if ($('btn-loomy-wechat')) {
+    $('btn-loomy-wechat').addEventListener('click', function () {
+      invoke('loomy_wechat_login').then(function (r) {
+        toast('已打开微信扫码页，请在浏览器中扫码确认');
+        if (r && r.authUrl) console.log('loomy wechat:', r.authUrl);
+        // 扫码成功后会话会写回凭据文件，轮询刷新面板即可看到。
+        var tries = 0;
+        var timer = setInterval(function () {
+          tries += 1;
+          refresh();
+          if (tries >= 60) clearInterval(timer);
+        }, 3000);
+      }).catch(function (e) { toast(e); });
+    });
+  }
+
   $('btn-loomy-import').addEventListener('click', function () {
     invoke('loomy_import_client').then(function (r) {
       toast(r.added ? ('发现并导入 ' + r.added + ' 个会话') : '未发现新的客户端会话');

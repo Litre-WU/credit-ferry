@@ -227,6 +227,7 @@ fn main() {
             commands::opencode_stop,
             commands::opencode_refresh,
             commands::probe_models,
+            commands::loomy_wechat_login,
             commands::loomy_import_client,
             commands::loomy_set_session,
             commands::loomy_select,
