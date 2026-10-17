@@ -31,7 +31,7 @@ fn probe_body(source: &str, model: &str) -> Value {
     let mut body = json!({
         "model": model,
         "messages": [{ "role": "user", "content": "hi" }],
-        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" || source == "lobsterai" || source == "trae" || source == "minimax" { 200 } else { 8 },
+        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" || source == "lobsterai" || source == "trae" || source == "minimax" || source == "cline" { 200 } else { 8 },
     });
     if source == "maodao" {
         body["stream"] = json!(false);
@@ -55,6 +55,7 @@ pub async fn probe_source(state: &Arc<AppState>, source: &str) -> Vec<(String, S
             "lobsterai" => &store.models.lobsterai,
             "trae" => &store.models.trae,
             "minimax" => &store.models.minimax,
+            "cline" => &store.models.cline,
             _ => &store.models.loomy,
         };
         list.iter().map(|e| e.upstream_id.clone()).collect()
@@ -299,7 +300,7 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 Err(e) => Err(e),
             }
         }
-        "lobsterai" | "trae" | "minimax" => {
+        "lobsterai" | "trae" | "minimax" | "cline" => {
             // Native Bearer-token channels: refresh single-use RT under the
             // global gate when near expiry, then one streamed probe request.
             let source = source.to_string();
@@ -308,6 +309,7 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 match source.as_str() {
                     "lobsterai" => store.credentials.lobsterai.clone(),
                     "trae" => store.credentials.trae.clone(),
+                    "cline" => store.credentials.cline.clone(),
                     _ => store.credentials.minimax.clone(),
                 }
             };
@@ -324,6 +326,7 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 let refreshed = match source.as_str() {
                     "lobsterai" => state.lobsterai.refresh(&mut creds).await,
                     "trae" => Err("TRAE 暂未支持自动续期，请重新登录".to_string()),
+                    "cline" => state.cline.refresh(&mut creds).await,
                     _ => state.minimax.refresh(&mut creds).await,
                 };
                 if let Err(e) = refreshed {
@@ -338,6 +341,7 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 match source.as_str() {
                     "lobsterai" => store.credentials.lobsterai = creds.clone(),
                     "trae" => store.credentials.trae = creds.clone(),
+                    "cline" => store.credentials.cline = creds.clone(),
                     _ => store.credentials.minimax = creds.clone(),
                 }
                 store.save_credentials();
@@ -347,6 +351,7 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
             let resp = match source.as_str() {
                 "lobsterai" => state.lobsterai.chat(&creds, &body).await,
                 "trae" => state.trae.chat(&creds, &body, 0).await,
+                "cline" => state.cline.chat(&creds, &body).await,
                 _ => state.minimax.chat(&creds, &body).await,
             };
             match resp {

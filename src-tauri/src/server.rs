@@ -26,12 +26,14 @@ use serde_json::{json, Value};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::buddy::{self, BuddyClient};
+use crate::cline::ClineClient;
 use crate::kilo::KiloClient;
 use crate::loomy::LoomyClient;
 use crate::lobsterai::LobsterClient;
 use crate::maodao::{self, MaodaoClient, MaodaoLogin};
 use crate::minimax::MinimaxClient;
 use crate::opencode::{OpenCodeClient, OpenCodeRuntime};
+use crate::qoder::{self, QoderClient};
 use crate::raccoon::{ensure_fresh, RaccoonClient};
 use crate::store::{LedgerEntry, ModelEntry, Store};
 use crate::trae::TraeClient;
@@ -66,6 +68,10 @@ pub struct AppState {
     pub trae: TraeClient,
     /// MiniMax Code native channel (minimax.rs).
     pub minimax: MinimaxClient,
+    /// Cline native channel (cline.rs) — fully usable.
+    pub cline: ClineClient,
+    /// Qoder / Qoder CN (qoder.rs) — login + quota only; inference gated.
+    pub qoder: QoderClient,
     pub maodao: MaodaoClient,
     /// In-flight browser login for the Maodao upstream.
     pub maodao_login: Mutex<Option<MaodaoLogin>>,
@@ -146,6 +152,7 @@ pub fn client_model_id(entry: &ModelEntry) -> String {
         "lobsterai" => "LobsterAI",
         "trae" => "TRAE",
         "minimax" => "MiniMax",
+        "cline" => "Cline",
         _ => "Loomy",
     };
     format!("{} · {}", prefix, entry.name)
@@ -218,7 +225,8 @@ pub async fn resolve_model(state: &AppState, requested: &str) -> Option<ModelEnt
         .chain(store.models.workbuddy.iter())
         .chain(store.models.lobsterai.iter())
         .chain(store.models.trae.iter())
-        .chain(store.models.minimax.iter());
+        .chain(store.models.minimax.iter())
+        .chain(store.models.cline.iter());
     let mut found = None;
     for entry in candidates {
         if client_model_id(entry) == requested || upstream_model_id(entry) == requested {
@@ -518,6 +526,44 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                 _ => state.minimax.chat(&creds, &upstream_body).await,
             };
             match resp {
+                Ok(r) => {
+                    if client_stream {
+                        Upstream::Http(r)
+                    } else {
+                        Upstream::HttpFoldSse(r)
+                    }
+                }
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "cline" => {
+            // OpenAI-compatible native channel; refresh the single-use RT
+            // under the global gate when the access token nears expiry.
+            let mut creds = {
+                let store = state.store.lock().await;
+                store.credentials.cline.clone()
+            };
+            if !creds.ready() {
+                return json_error(StatusCode::UNAUTHORIZED, "Cline 未登录");
+            }
+            if creds.expired() || creds.expires_at - crate::store::now_ms() < 5 * 60 * 1000 {
+                let _gate = state.refresh_gate.lock().await;
+                if let Err(e) = state.cline.refresh(&mut creds).await {
+                    drop(_gate);
+                    if e.starts_with("REFRESH_TERMINAL") {
+                        return json_error(StatusCode::UNAUTHORIZED, "Cline 会话已失效，请重新登录");
+                    }
+                    return json_error(StatusCode::BAD_GATEWAY, &e);
+                }
+                let mut store = state.store.lock().await;
+                store.credentials.cline = creds.clone();
+                store.save_credentials();
+            }
+            let client_stream = stream;
+            if let Some(obj) = upstream_body.as_object_mut() {
+                obj.insert("stream".into(), Value::Bool(client_stream));
+            }
+            match state.cline.chat(&creds, &upstream_body).await {
                 Ok(r) => {
                     if client_stream {
                         Upstream::Http(r)
@@ -834,6 +880,9 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let mut lobsterai_models = Vec::new();
     let mut trae_models = Vec::new();
     let mut minimax_models = Vec::new();
+    let mut cline_models = Vec::new();
+    let mut qoder_models = Vec::new();
+    let mut qodercn_models = Vec::new();
     for entry in store.models.loomy.iter() {
         loomy_models.push(model_json(&store, entry));
     }
@@ -867,6 +916,12 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     for entry in store.models.minimax.iter() {
         minimax_models.push(model_json(&store, entry));
     }
+    for entry in store.models.cline.iter() {
+        cline_models.push(model_json(&store, entry));
+    }
+    // Qoder 目录仅展示（不发布到 /v1/models）：推理端点需 WASM 签名。
+    qoder_models = qoder::fallback_models(qoder::QODER_SOURCE);
+    qodercn_models = qoder::fallback_models(qoder::QODERCN_SOURCE);
     let active = store.credentials.loomy.active.clone();
     let loomy_session = store.credentials.loomy.sessions.iter().find(|s| Some(&s.name) == active.as_ref());
     let raccoon = &store.credentials.raccoon;
@@ -955,6 +1010,26 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "loggedIn": store.credentials.minimax.ready(),
             "expiresAtMs": store.credentials.minimax.expires_at,
             "models": minimax_models,
+        },
+        "cline": {
+            "loggedIn": store.credentials.cline.ready(),
+            "nickname": store.credentials.cline.nickname,
+            "expiresAtMs": store.credentials.cline.expires_at,
+            "models": cline_models,
+        },
+        "qoder": {
+            "loggedIn": store.credentials.qoder.ready(),
+            "expiresAtMs": store.credentials.qoder.expires_at,
+            "models": qoder_models,
+            "gated": true,
+            "gateNote": "Qoder 推理端点需 qoder-auth-wasm.wasm 生成 Bearer COSY.<载荷>.<签名> 与加密请求体，普通 Bearer 会被判 403 Signature invalid——本工具原生实现其登录/目录/每日签到额度，但暂不可调用其模型（目录仅供查看，不发布到 /v1/models）。",
+        },
+        "qodercn": {
+            "loggedIn": store.credentials.qodercn.ready(),
+            "expiresAtMs": store.credentials.qodercn.expires_at,
+            "models": qodercn_models,
+            "gated": true,
+            "gateNote": "同上（WASM 签名限制）；仅登录与每日额度可用。",
         },
         // P1-3 keepalive loop state (rounds, notes, terminal blocks).
         "keepalive": crate::keepalive::keepalive_json(&store),

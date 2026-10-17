@@ -264,6 +264,15 @@ pub struct Credentials {
     /// Native MiniMax Code.
     #[serde(default)]
     pub minimax: TokenCreds,
+    /// Native Cline (OpenAI-compatible).
+    #[serde(default)]
+    pub cline: TokenCreds,
+    /// Native Qoder (国际版) — login/catalog/quota only; inference needs a WASM signer.
+    #[serde(default)]
+    pub qoder: TokenCreds,
+    /// Native Qoder CN (中国版).
+    #[serde(default)]
+    pub qodercn: TokenCreds,
     #[serde(default)]
     pub keepalive: KeepaliveState,
 }
@@ -317,6 +326,9 @@ pub struct ModelCache {
     /// Native MiniMax Code.
     #[serde(default)]
     pub minimax: Vec<ModelEntry>,
+    /// Native Cline (OpenAI-compatible, device-code login).
+    #[serde(default)]
+    pub cline: Vec<ModelEntry>,
     #[serde(default)]
     pub fetched_at_ms: i64,
     /// Callability verdicts, keyed by "<source>/<upstream_id>".

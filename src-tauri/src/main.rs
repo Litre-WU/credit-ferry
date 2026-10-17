@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod buddy;
+mod cline;
 mod commands;
 mod dsh_connect;
 mod export;
@@ -12,6 +13,7 @@ mod maodao;
 mod minimax;
 mod opencode;
 mod probe;
+mod qoder;
 mod raccoon;
 mod server;
 mod store;
@@ -72,6 +74,8 @@ fn main() {
                 lobsterai: lobsterai::LobsterClient::new(),
                 trae: trae::TraeClient::new(),
                 minimax: minimax::MinimaxClient::new(),
+                cline: cline::ClineClient::new(),
+                qoder: qoder::QoderClient::new(),
                 zen_sessions: tokio::sync::Mutex::new(zen::load_session_map(&zen_dir)),
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
@@ -247,6 +251,10 @@ fn main() {
             commands::minimax_refresh,
             commands::lobsterai_refresh,
             commands::trae_refresh,
+            commands::cline_login,
+            commands::cline_refresh,
+            commands::qoder_login,
+            commands::qodercn_login,
             commands::keepalive_run_once,
             commands::keepalive_status,
             commands::export_workbuddy,

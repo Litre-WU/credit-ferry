@@ -155,6 +155,17 @@
     $('minimax-status').textContent = mm.loggedIn
       ? ('已登录 · 令牌到期 ' + fmtTime(mm.expiresAtMs) + ' · ' + mm.models.length + ' 个模型')
       : '未登录 — 点「浏览器登录」（设备码授权）';
+    var cl = snap.cline || { loggedIn: false, models: [], nickname: '' };
+    $('cline-models').textContent = cl.models.length;
+    $('cline-probe-stat').textContent = probeStat(cl.models);
+    $('cline-status').textContent = cl.loggedIn
+      ? ('已登录' + (cl.nickname ? ('：' + cl.nickname) : '') + ' · 令牌到期 ' + fmtTime(cl.expiresAtMs) + ' · ' + cl.models.length + ' 个模型')
+      : '未登录 — 点「浏览器登录」（设备码授权，WorkOS flow）';
+    var qd = snap.qoder || { loggedIn: false, models: [] };
+    var qc = snap.qodercn || { loggedIn: false, models: [] };
+    var qst = (qd.loggedIn ? '国际版已登录' : '国际版未登录') + ' · ' + (qc.loggedIn ? '中国版已登录' : '中国版未登录')
+      + ' · 目录 ' + (qd.models || []).length + '/' + (qc.models || []).length + ' · 推理受 WASM 签名限制（模型不发布）';
+    $('qoder-status').textContent = qst;
 
     // Keepalive (P1-3)
     var ka = snap.keepalive || { lastRunMs: 0, notes: [], blocks: [] };
@@ -173,7 +184,7 @@
       blocksEl.style.display = 'none';
       blocksEl.innerHTML = '';
     }
-    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models);
+    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models).concat(cl.models);
     $('model-count').textContent = all.length;
     var tbody = document.querySelector('#models-table tbody');
     if (!all.length) {
@@ -195,6 +206,7 @@
           : m.source === 'lobsterai' ? '<span class="badge lobsterai">LobsterAI</span>'
           : m.source === 'trae' ? '<span class="badge trae">TRAE</span>'
           : m.source === 'minimax' ? '<span class="badge minimax">MiniMax</span>'
+          : m.source === 'cline' ? '<span class="badge cline">Cline</span>'
           : '<span class="badge loomy">Loomy</span>';
         var probe;
         if (m.probeOk === true) {
@@ -233,6 +245,7 @@
           : e.source === 'lobsterai' ? '<span class="badge lobsterai">LobsterAI</span>'
           : e.source === 'trae' ? '<span class="badge trae">TRAE</span>'
           : e.source === 'minimax' ? '<span class="badge minimax">MiniMax</span>'
+          : e.source === 'cline' ? '<span class="badge cline">Cline</span>'
           : '<span class="badge loomy">Loomy</span>';
         var points = e.points == null ? '—' : e.points;
         var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
@@ -447,7 +460,7 @@
 
   // ---- Buddy family (native OAuth login + refresh + probe) ----
   function buddyLogin(source, btn) {
-    var cmd = source === 'workbuddy' ? 'workbuddy_login' : (source === 'minimax' ? 'minimax_login' : 'buddy_login');
+    var cmd = source === 'workbuddy' ? 'workbuddy_login' : (source === 'minimax' ? 'minimax_login' : (source === 'cline' ? 'cline_login' : (source === 'qoder' ? 'qoder_login' : (source === 'qodercn' ? 'qodercn_login' : 'buddy_login'))));
     btn.disabled = true;
     btn.textContent = '打开登录页…';
     invoke(cmd).then(function () {
@@ -511,6 +524,11 @@
   $('btn-minimax-refresh').addEventListener('click', function () { genericRefresh('minimax', this); });
   $('btn-minimax-probe').addEventListener('click', function () { probeClick('minimax', this); });
   $('btn-minimax-login').addEventListener('click', function () { buddyLogin('minimax', this); });
+  $('btn-cline-refresh').addEventListener('click', function () { genericRefresh('cline', this); });
+  $('btn-cline-probe').addEventListener('click', function () { probeClick('cline', this); });
+  $('btn-cline-login').addEventListener('click', function () { buddyLogin('cline', this); });
+  $('btn-qoder-login').addEventListener('click', function () { buddyLogin('qoder', this); });
+  $('btn-qodercn-login').addEventListener('click', function () { buddyLogin('qodercn', this); });
 
   // ---- 验证可调用性（三源通用） ----
   function probeClick(source, btn) {

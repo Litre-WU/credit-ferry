@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::loomy::import_client_sessions;
 use crate::maodao::{self, MaodaoLoginStatus};
+use crate::qoder;
 use crate::raccoon::{QrStatus, RaccoonClient};
 use crate::server::{self, AppState};
 use crate::store::{now_ms, OWNER};
@@ -141,7 +142,7 @@ pub async fn auto_probe_if_needed(state: &Arc<AppState>, source: &str) {
 /// Verify every model of one source right now (panel button).
 #[tauri::command]
 pub async fn probe_models(ferry: FerryState<'_>, source: String) -> Result<Value, String> {
-    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" || source == "lobsterai" || source == "trae" || source == "minimax" { source } else { "loomy".to_string() };
+    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" || source == "lobsterai" || source == "trae" || source == "minimax" || source == "cline" { source } else { "loomy".to_string() };
     let verdicts = crate::probe::probe_source_bounded(&ferry.state, &source).await;
     crate::probe::save_verdicts(&ferry.state, &verdicts, &source).await;
     let ok = verdicts.iter().filter(|(_, v)| v.ok).count();
@@ -882,6 +883,7 @@ fn generic_creds<'a>(store: &'a crate::store::Store, source: &str) -> &'a crate:
     match source {
         "lobsterai" => &store.credentials.lobsterai,
         "trae" => &store.credentials.trae,
+        "cline" => &store.credentials.cline,
         _ => &store.credentials.minimax,
     }
 }
@@ -890,6 +892,7 @@ fn put_generic_creds(store: &mut crate::store::Store, source: &str, creds: crate
     match source {
         "lobsterai" => store.credentials.lobsterai = creds,
         "trae" => store.credentials.trae = creds,
+        "cline" => store.credentials.cline = creds,
         _ => store.credentials.minimax = creds,
     }
 }
@@ -906,6 +909,7 @@ async fn generic_refresh_inner(state: &Arc<AppState>, source: &str) -> Result<Va
     let models = match source {
         "lobsterai" => state.lobsterai.catalog(&creds).await,
         "trae" => state.trae.catalog(&creds).await,
+        "cline" => state.cline.catalog(&creds).await,
         _ => state.minimax.catalog(&creds).await,
     }
     .map_err(|e| format!("读取 {} 模型失败：{}", source, e))?;
@@ -915,6 +919,7 @@ async fn generic_refresh_inner(state: &Arc<AppState>, source: &str) -> Result<Va
         match source {
             "lobsterai" => store.models.lobsterai = models,
             "trae" => store.models.trae = models,
+            "cline" => store.models.cline = models,
             _ => store.models.minimax = models,
         }
         store.models.fetched_at_ms = now_ms();
@@ -958,6 +963,106 @@ pub async fn minimax_login(ferry: FerryState<'_>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn minimax_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
     generic_refresh_inner(&ferry.state, "minimax").await
+}
+
+// ------------------------------------------------------------ cline / qoder
+
+/// Cline device-code login: open the WorkOS verification page, poll in the
+/// background, persist + pull the roster on success.
+async fn cline_login_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let auth = state
+        .cline
+        .start_device_auth()
+        .await
+        .map_err(|e| format!("cline 发起登录失败：{}", e))?;
+    let device_code = auth.get("deviceCode").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let url = auth
+        .get("verificationUriComplete")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| auth.get("verificationUri").and_then(|v| v.as_str()).unwrap_or("").to_string());
+    open_in_browser(&url);
+    let bg = Arc::clone(state);
+    let dc = device_code.clone();
+    tauri::async_runtime::spawn(async move {
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if let Ok(creds) = bg.cline.poll_device_token(&dc).await {
+                let mut store = bg.store.lock().await;
+                store.credentials.cline = creds;
+                store.save_credentials();
+                drop(store);
+                let _ = generic_refresh_inner(&bg, "cline").await;
+                return;
+            }
+        }
+    });
+    Ok(json!({
+        "authUrl": url,
+        "userCode": auth.get("userCode").and_then(|v| v.as_str()).unwrap_or(""),
+    }))
+}
+
+#[tauri::command]
+pub async fn cline_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    cline_login_inner(&ferry.state).await
+}
+
+/// Qoder / Qoder CN login (device + PKCE) and daily-quota claim. Inference is
+/// gated (WASM signer), so this persists the session and reports the quota.
+async fn qoder_login_inner(state: &Arc<AppState>, source: &str) -> Result<Value, String> {
+    let product = if source == "qodercn" { &crate::qoder::QODERCN } else { &crate::qoder::QODER };
+    let verifier = crate::store::new_hex(32);
+    let nonce = crate::store::new_hex(16);
+    let machine_id = crate::store::new_hex(16);
+    let url = state.qoder.build_auth_url(product, &verifier, &nonce, &machine_id);
+    open_in_browser(&url);
+    let bg = Arc::clone(state);
+    let prod = *product;
+    let v = verifier.clone();
+    let n = nonce.clone();
+    let src = source.to_string();
+    tauri::async_runtime::spawn(async move {
+        for _ in 0..80 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            if let Ok(creds) = bg.qoder.poll_token(&prod, &v, &n).await {
+                {
+                    let mut store = bg.store.lock().await;
+                    if src == "qodercn" {
+                        store.credentials.qodercn = creds;
+                    } else {
+                        store.credentials.qoder = creds;
+                    }
+                    store.save_credentials();
+                }
+                // Claim the daily free credits if available.
+                let creds = {
+                    let store = bg.store.lock().await;
+                    if src == "qodercn" { store.credentials.qodercn.clone() } else { store.credentials.qoder.clone() }
+                };
+                let _ = bg.qoder.claim_daily(&prod, &creds).await;
+                return;
+            }
+        }
+    });
+    Ok(json!({ "authUrl": url, "gated": true }))
+}
+
+#[tauri::command]
+pub async fn qoder_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    qoder_login_inner(&ferry.state, "qoder").await
+}
+
+#[tauri::command]
+pub async fn qodercn_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    qoder_login_inner(&ferry.state, "qodercn").await
+}
+
+/// Pull the Cline roster (needs login).
+#[tauri::command]
+pub async fn cline_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    generic_refresh_inner(&ferry.state, "cline").await
 }
 
 #[tauri::command]

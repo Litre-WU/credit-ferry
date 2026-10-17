@@ -48,6 +48,8 @@
   .badge.lobsterai { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
   .badge.trae { background: #ecfeff; color: #0e7490; border: 1px solid #a5f3fc; }
   .badge.minimax { background: #fefce8; color: #a16207; border: 1px solid #fde68a; }
+  .badge.cline { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .badge.qoder { background: #f4f4f5; color: #52525b; border: 1px solid #e4e4e7; }
   .badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.no { background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb; }
   .badge.free { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
@@ -76,7 +78,7 @@
   <img class="logo" src="./icon.png" alt="">
   <div>
     <h1>CreditFerry 积分摆渡</h1>
-    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax → 本机 OpenAI 兼容口</div>
+    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax · Cline → 本机 OpenAI 兼容口</div>
   </div>
   <span id="server-pill" class="pill off">服务未启动</span>
 </div>
@@ -259,6 +261,31 @@
         <span class="stat"><b id="minimax-probe-stat">—</b><span>可调用/已验</span></span>
       </div>
       <div id="minimax-status" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- Cline -->
+    <div class="card">
+      <h2><span class="badge cline">Cline</span> Cline（OpenAI 兼容）</h2>
+      <div class="desc">设备码登录（WorkOS flow）→ <span class="endpoint">api.cline.bot</span> 标准 OpenAI 协议。带 <code>:free</code> 后缀与 <code>cline-free/</code> 前缀的是每日免费额度模型，用满返回「daily free limit」。</div>
+      <div class="row">
+        <button class="primary" id="btn-cline-login">浏览器登录</button>
+        <button id="btn-cline-refresh">刷新模型</button>
+        <button id="btn-cline-probe">验证可调用性</button>
+        <span class="stat"><b id="cline-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="cline-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="cline-status" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- Qoder / Qoder CN (WASM-gated) -->
+    <div class="card">
+      <h2><span class="badge qoder">Qoder</span> Qoder / Qoder 中国版</h2>
+      <div class="desc">设备码 + PKCE 登录，目录来自内置实测表（catalog-v6 校准），并护住每日签到额度（每日 10:00 UTC+8 刷新）。<b>推理受限</b>：请求体与 <code>Bearer COSY.&lt;载荷&gt;.&lt;签名&gt;</code> 由 <code>qoder-auth-wasm.wasm</code> 生成，普通 Bearer 会被判 403 Signature invalid——故本工具原生支持其登录/目录/每日额度，但模型仅供查看、<b>不发布到 /v1/models</b>。</div>
+      <div class="row">
+        <button class="primary" id="btn-qoder-login">浏览器登录（国际版）</button>
+        <button id="btn-qodercn-login">浏览器登录（中国版）</button>
+      </div>
+      <div id="qoder-status" class="muted" style="margin-top:8px"></div>
     </div>
   </div>
 
