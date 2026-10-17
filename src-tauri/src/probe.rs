@@ -31,7 +31,7 @@ fn probe_body(source: &str, model: &str) -> Value {
     let mut body = json!({
         "model": model,
         "messages": [{ "role": "user", "content": "hi" }],
-        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" { 200 } else { 8 },
+        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" { 200 } else { 8 },
     });
     if source == "maodao" {
         body["stream"] = json!(false);
@@ -50,6 +50,8 @@ pub async fn probe_source(state: &Arc<AppState>, source: &str) -> Vec<(String, S
             "maodao" => &store.models.maodao,
             "kilo" => &store.models.kilo,
             "zen" => &store.models.zen,
+            "buddy" => &store.models.buddy,
+            "workbuddy" => &store.models.workbuddy,
             _ => &store.models.loomy,
         };
         list.iter().map(|e| e.upstream_id.clone()).collect()
@@ -223,6 +225,65 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
             body["stream"] = json!(true);
             crate::zen::apply_fingerprint(&mut body);
             match state.zen.chat(&body, &session).await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        Ok(())
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        Err(format!("upstream HTTP {}: {}", status.as_u16(), short(&text)))
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "buddy" | "workbuddy" => {
+            // Native Tencent-family probe. Stream-only upstream (non-stream
+            // 400), and the RT is single-use — renew under the same gate as
+            // the chat path when the access token is near expiry.
+            let source = source.to_string();
+            let product = if source == "workbuddy" {
+                &crate::buddy::WORKBUDDY
+            } else {
+                &crate::buddy::CODEBUDDY
+            };
+            let mut creds = {
+                let store = state.store.lock().await;
+                if source == "workbuddy" {
+                    store.credentials.buddy.workbuddy.clone()
+                } else {
+                    store.credentials.buddy.buddy.clone()
+                }
+            };
+            if !creds.ready() {
+                return StoredVerdict {
+                    ok: false,
+                    note: "未登录".into(),
+                    at_ms: now_ms(),
+                    category: "unavailable".into(),
+                };
+            }
+            if creds.expired() || creds.expires_at - now_ms() < 5 * 60 * 1000 {
+                let _gate = state.refresh_gate.lock().await;
+                if let Err(e) = state.buddy.refresh(product, &mut creds).await {
+                    return StoredVerdict {
+                        ok: false,
+                        note: short(&e),
+                        at_ms: now_ms(),
+                        category: "unavailable".into(),
+                    };
+                }
+                let mut store = state.store.lock().await;
+                if source == "workbuddy" {
+                    store.credentials.buddy.workbuddy = creds.clone();
+                } else {
+                    store.credentials.buddy.buddy = creds.clone();
+                }
+                store.save_credentials();
+            }
+            let mut body = body;
+            body["stream"] = json!(true);
+            match state.buddy.chat(product, &creds, &body).await {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {

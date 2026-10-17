@@ -122,20 +122,19 @@
     $('zen-sessions').textContent = zn.sessions || 0;
     $('zen-status').textContent = '匿名公共池 · ' + zn.models.length + ' 个免费车道模型 · 会话映射 ' + (zn.sessions || 0) + ' 条';
 
-    // OFM 聚合桥接
-    var of = snap.ofm || { online: false, models: [], channels: [] };
-    $('ofm-models').textContent = of.models.length;
-    $('ofm-channels').textContent = (of.channels || []).length;
-    var ofmWarn = $('ofm-warn');
-    if (!of.online) {
-      $('ofm-status').textContent = 'OFM 服务未运行 — 启动 Our Free Model（standalone，127.0.0.1:18900）后点「刷新模型」';
-      ofmWarn.style.display = 'block';
-      ofmWarn.textContent = '⚠ 未检测到 OFM 转发口（127.0.0.1:18900）。桥接依赖 OFM 本体在运行；它负责这些账号渠道的登录、保活与每日签到。';
-    } else {
-      var chTxt = (of.channels || []).map(function (c) { return c.channel + ' ' + c.count; }).join(' · ');
-      $('ofm-status').textContent = '桥接在线 · ' + of.models.length + ' 个模型（' + (chTxt || '无渠道') + '）· 探针由 OFM 侧负责';
-      ofmWarn.style.display = 'none';
-    }
+    // Buddy family (native OAuth: CodeBuddy CN / WorkBuddy Intl)
+    var bd = snap.buddy || { loggedIn: false, models: [], nickname: '' };
+    $('buddy-models').textContent = bd.models.length;
+    $('buddy-probe-stat').textContent = probeStat(bd.models);
+    $('buddy-status').textContent = bd.loggedIn
+      ? ('已登录' + (bd.nickname ? ('：' + bd.nickname) : '') + ' · 令牌到期 ' + fmtTime(bd.expiresAtMs) + ' · ' + bd.models.length + ' 个模型')
+      : '未登录 — 点「浏览器登录」（自动打开官方登录页，完成后自动拉取目录）';
+    var wb = snap.workbuddy || { loggedIn: false, models: [], nickname: '' };
+    $('workbuddy-models').textContent = wb.models.length;
+    $('workbuddy-probe-stat').textContent = probeStat(wb.models);
+    $('workbuddy-status').textContent = wb.loggedIn
+      ? ('已登录' + (wb.nickname ? ('：' + wb.nickname) : '') + ' · 令牌到期 ' + fmtTime(wb.expiresAtMs) + ' · ' + wb.models.length + ' 个模型')
+      : '未登录 — 点「浏览器登录」（国际版账号）';
 
     // Keepalive (P1-3)
     var ka = snap.keepalive || { lastRunMs: 0, notes: [], blocks: [] };
@@ -154,7 +153,7 @@
       blocksEl.style.display = 'none';
       blocksEl.innerHTML = '';
     }
-    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(of.models);
+    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models);
     $('model-count').textContent = all.length;
     var tbody = document.querySelector('#models-table tbody');
     if (!all.length) {
@@ -163,7 +162,6 @@
       tbody.innerHTML = all.map(function (m) {
         var mult = m.multiplier == null ? '—' : ('×' + m.multiplier);
         var status = (m.source === 'kilo' || m.source === 'zen') ? '<span class="badge free">免费池</span>'
-          : m.source === 'ofm' ? '<span class="badge ofm">账号池</span>'
           : m.billingStatus === 'limited_free' ? '<span class="badge free">限免</span>'
           : m.billingStatus === 'discount' ? '<span class="badge promo">折扣</span>'
           : '<span class="badge no">标准</span>';
@@ -172,7 +170,8 @@
           : m.source === 'maodao' ? '<span class="badge maodao">码道</span>'
           : m.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
           : m.source === 'zen' ? '<span class="badge zen">Zen</span>'
-          : m.source === 'ofm' ? '<span class="badge ofm">OFM</span>'
+          : m.source === 'buddy' ? '<span class="badge buddy">CodeBuddy</span>'
+          : m.source === 'workbuddy' ? '<span class="badge workbuddy">WorkBuddy</span>'
           : '<span class="badge loomy">Loomy</span>';
         var probe;
         if (m.probeOk === true) {
@@ -180,9 +179,7 @@
         } else if (m.probeOk === false) {
           probe = '<span class="badge no" style="color:#b91c1c;border-color:#fecaca;background:#fef2f2" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
         } else {
-          probe = m.source === 'ofm'
-            ? '<span class="badge ofm" title="可用性由 OFM 侧探测与账号轮转负责">桥接</span>'
-            : '<span class="badge no" title="尚未验证">未验证</span>';
+          probe = '<span class="badge no" title="尚未验证">未验证</span>';
         }
         var rowStyle = (m.probeOk === false) ? ' style="opacity:.55"' : '';
         return '<tr' + rowStyle + '><td><b>' + esc(m.clientId) + '</b></td>' +
@@ -208,7 +205,8 @@
           : e.source === 'maodao' ? '<span class="badge maodao">码道</span>'
           : e.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
           : e.source === 'zen' ? '<span class="badge zen">Zen</span>'
-          : e.source === 'ofm' ? '<span class="badge ofm">OFM</span>'
+          : e.source === 'buddy' ? '<span class="badge buddy">CodeBuddy</span>'
+          : e.source === 'workbuddy' ? '<span class="badge workbuddy">WorkBuddy</span>'
           : '<span class="badge loomy">Loomy</span>';
         var points = e.points == null ? '—' : e.points;
         var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
@@ -421,22 +419,49 @@
     });
   });
 
-  // ---- OFM 聚合桥接 ----
-  $('btn-ofm-refresh').addEventListener('click', function () {
-    var btn = $('btn-ofm-refresh');
+  // ---- Buddy family (native OAuth login + refresh + probe) ----
+  function buddyLogin(source, btn) {
+    var cmd = source === 'workbuddy' ? 'workbuddy_login' : 'buddy_login';
+    btn.disabled = true;
+    btn.textContent = '打开登录页…';
+    invoke(cmd).then(function () {
+      btn.disabled = false;
+      btn.textContent = '浏览器登录';
+      toast('已打开官方登录页，请在浏览器完成登录后等待目录自动加载');
+      // poll a few times so the background login poller has time to land
+      var tries = 0;
+      var iv = setInterval(function () {
+        tries++;
+        refresh();
+        if (tries > 10) clearInterval(iv);
+      }, 1500);
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '浏览器登录';
+      toast(e);
+    });
+  }
+  function buddyRefresh(source, btn) {
+    var cmd = source === 'workbuddy' ? 'workbuddy_refresh' : 'buddy_refresh';
     btn.disabled = true;
     btn.textContent = '刷新中…';
-    invoke('ofm_refresh').then(function (r) {
+    invoke(cmd).then(function (r) {
       btn.disabled = false;
       btn.textContent = '刷新模型';
-      toast('OFM：桥接 ' + r.models + ' 个账号渠道模型');
+      toast(source + '：' + r.models + ' 个模型');
       refresh();
     }).catch(function (e) {
       btn.disabled = false;
       btn.textContent = '刷新模型';
       toast(e);
     });
-  });
+  }
+  $('btn-buddy-login').addEventListener('click', function () { buddyLogin('buddy', this); });
+  $('btn-buddy-refresh').addEventListener('click', function () { buddyRefresh('buddy', this); });
+  $('btn-buddy-probe').addEventListener('click', function () { probeClick('buddy', this); });
+  $('btn-workbuddy-login').addEventListener('click', function () { buddyLogin('workbuddy', this); });
+  $('btn-workbuddy-refresh').addEventListener('click', function () { buddyRefresh('workbuddy', this); });
+  $('btn-workbuddy-probe').addEventListener('click', function () { probeClick('workbuddy', this); });
 
   // ---- 验证可调用性（三源通用） ----
   function probeClick(source, btn) {

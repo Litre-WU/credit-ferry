@@ -117,7 +117,9 @@ pub async fn refresh_all(state: &Arc<AppState>) {
     let _ = maodao_refresh_inner(state).await;
     let _ = kilo_refresh_inner(state).await;
     let _ = zen_refresh_inner(state).await;
-    let _ = ofm_refresh_inner(state).await;
+    // Buddy family refreshes only when logged in; errors are ignored here.
+    let _ = buddy_refresh_inner(state, "buddy").await;
+    let _ = buddy_refresh_inner(state, "workbuddy").await;
     // P1-3: keep the renewal loop alive regardless of the server toggle.
     start_keepalive(state);
 }
@@ -136,7 +138,7 @@ pub async fn auto_probe_if_needed(state: &Arc<AppState>, source: &str) {
 /// Verify every model of one source right now (panel button).
 #[tauri::command]
 pub async fn probe_models(ferry: FerryState<'_>, source: String) -> Result<Value, String> {
-    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" { source } else { "loomy".to_string() };
+    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" || source == "buddy" || source == "workbuddy" { source } else { "loomy".to_string() };
     let verdicts = crate::probe::probe_source_bounded(&ferry.state, &source).await;
     crate::probe::save_verdicts(&ferry.state, &verdicts, &source).await;
     let ok = verdicts.iter().filter(|(_, v)| v.ok).count();
@@ -758,31 +760,117 @@ pub async fn zen_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
     zen_refresh_inner(&ferry.state).await
 }
 
-// ---------------------------------------------------------------- ofm bridge
+// ---------------------------------------------------------------- buddy family
 
-/// Refresh the OFM bridge roster. Unlike the free lanes, this is NOT probed
-/// a second time: OFM already rotates accounts and maintains its own
-/// availability verdicts (and a probe would spend real account credits for a
-/// signal OFM is better placed to give). We trust its `/v1/models` roster.
-pub async fn ofm_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+/// One native Tencent-family product: login (browser authUrl + background poll),
+/// then refresh the model roster. `workbuddy` differs only in endpoint/UA.
+fn buddy_product(source: &str) -> &'static crate::buddy::Product {
+    if source == "workbuddy" {
+        &crate::buddy::WORKBUDDY
+    } else {
+        &crate::buddy::CODEBUDDY
+    }
+}
+
+fn buddy_creds_slot<'a>(
+    store: &'a crate::store::Store,
+    source: &str,
+) -> &'a crate::store::BuddyCreds {
+    if source == "workbuddy" {
+        &store.credentials.buddy.workbuddy
+    } else {
+        &store.credentials.buddy.buddy
+    }
+}
+
+fn buddy_put_creds(store: &mut crate::store::Store, source: &str, creds: crate::store::BuddyCreds) {
+    if source == "workbuddy" {
+        store.credentials.buddy.workbuddy = creds;
+    } else {
+        store.credentials.buddy.buddy = creds;
+    }
+}
+
+/// Refresh the model roster for one buddy-family product.
+async fn buddy_refresh_inner(state: &Arc<AppState>, source: &str) -> Result<Value, String> {
+    let product = buddy_product(source);
+    let creds = {
+        let store = state.store.lock().await;
+        buddy_creds_slot(&store, source).clone()
+    };
+    if !creds.ready() {
+        return Err(format!("{} 未登录", product.display));
+    }
     let models = state
-        .ofm
-        .catalog()
+        .buddy
+        .catalog(product, &creds)
         .await
-        .map_err(|e| format!("读取 OFM 模型失败：{}", e))?;
+        .map_err(|e| format!("读取 {} 模型失败：{}", product.display, e))?;
+    let count = models.len();
     {
         let mut store = state.store.lock().await;
-        store.models.ofm = models;
+        if source == "workbuddy" {
+            store.models.workbuddy = models;
+        } else {
+            store.models.buddy = models;
+        }
         store.models.fetched_at_ms = now_ms();
         store.save_models();
     }
-    let count = state.store.lock().await.models.ofm.len();
+    auto_probe_if_needed(state, source).await;
     Ok(json!({ "models": count }))
 }
 
+/// Start a browser login: fetch auth/state, open the authUrl, then poll in the
+/// background and persist the credential when the user finishes. Returns the
+/// URL so the panel can show / re-open it.
+async fn buddy_login_inner(state: &Arc<AppState>, source: &str) -> Result<Value, String> {
+    let product = buddy_product(source);
+    let (login_state, auth_url) = state
+        .buddy
+        .auth_state(product)
+        .await
+        .map_err(|e| format!("{} 发起登录失败：{}", product.display, e))?;
+    open_in_browser(&auth_url);
+    // Background poller: token → account → persist → refresh roster. The
+    // panel polls get_snapshot and sees loggedIn flip when it lands.
+    let bg = Arc::clone(state);
+    let prod = *product;
+    let src = source.to_string();
+    let ls = login_state.clone();
+    tauri::async_runtime::spawn(async move {
+        let Ok(mut creds) = bg.buddy.poll_login_token(&prod, &ls).await else {
+            return;
+        };
+        let _ = bg.buddy.poll_login_account(&prod, &mut creds, &ls).await;
+        {
+            let mut store = bg.store.lock().await;
+            buddy_put_creds(&mut store, &src, creds.clone());
+            store.save_credentials();
+        }
+        let _ = buddy_refresh_inner(&bg, &src).await;
+    });
+    Ok(json!({ "authUrl": auth_url }))
+}
+
 #[tauri::command]
-pub async fn ofm_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
-    ofm_refresh_inner(&ferry.state).await
+pub async fn buddy_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    buddy_login_inner(&ferry.state, "buddy").await
+}
+
+#[tauri::command]
+pub async fn workbuddy_login(ferry: FerryState<'_>) -> Result<Value, String> {
+    buddy_login_inner(&ferry.state, "workbuddy").await
+}
+
+#[tauri::command]
+pub async fn buddy_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    buddy_refresh_inner(&ferry.state, "buddy").await
+}
+
+#[tauri::command]
+pub async fn workbuddy_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    buddy_refresh_inner(&ferry.state, "workbuddy").await
 }
 
 // ---------------------------------------------------------------- export

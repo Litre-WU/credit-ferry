@@ -182,7 +182,8 @@ fn export_models_json(store: &Store, file: &Path, endpoint: &str, key: &str) -> 
     models.extend(store.models.maodao.clone());
     models.extend(store.models.kilo.clone());
     models.extend(store.models.zen.clone());
-    models.extend(store.models.ofm.clone());
+    models.extend(store.models.buddy.clone());
+    models.extend(store.models.workbuddy.clone());
     // Models with a fresh failing verdict are not exported.
     models.retain(|m| store.models.publishable(&m.source, &m.upstream_id));
     let merged = merge_models(&document, &models, endpoint, key);
@@ -353,7 +354,8 @@ fn dsh_provider_block(store: &Store, endpoint: &str, indent: usize) -> (String, 
     models.extend(store.models.maodao.clone());
     models.extend(store.models.kilo.clone());
     models.extend(store.models.zen.clone());
-    models.extend(store.models.ofm.clone());
+    models.extend(store.models.buddy.clone());
+    models.extend(store.models.workbuddy.clone());
     models.retain(|m| store.models.publishable(&m.source, &m.upstream_id));
     if models.is_empty() {
         return (String::new(), 0);
@@ -623,7 +625,8 @@ fn export_qoder_settings(store: &Store, file: &Path, endpoint: &str, key: &str) 
     models.extend(store.models.maodao.clone());
     models.extend(store.models.kilo.clone());
     models.extend(store.models.zen.clone());
-    models.extend(store.models.ofm.clone());
+    models.extend(store.models.buddy.clone());
+    models.extend(store.models.workbuddy.clone());
     models.retain(|m| store.models.publishable(&m.source, &m.upstream_id));
     if models.is_empty() {
         return Err("没有可导出的模型（先刷新上游并通过验证）".to_string());

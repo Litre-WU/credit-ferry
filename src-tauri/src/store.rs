@@ -144,11 +144,64 @@ pub struct BlockInfo {
     pub at_ms: i64,
 }
 
+/// CodeBuddy (腾讯, 国内) / WorkBuddy (国际) 凭据 —— 同一套 OAuth 协议，
+/// 仅 endpoint / productCode / UA / domain 不同。
+/// refresh_token 是**单次消费**的：每次刷新都轮换，故所有续期路径必须走
+/// 同一把闸（server.rs 的 refresh_gate）。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BuddyCreds {
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    /// ms since epoch（绝对时间；上游给 expiresAt/expiresIn 两种形态，见 buddy.rs）。
+    #[serde(default)]
+    pub expires_at: i64,
+    #[serde(default)]
+    pub refresh_expires_at: i64,
+    #[serde(default)]
+    pub token_type: String,
+    #[serde(default)]
+    pub scope: String,
+    /// 上游下发的权威域名（X-Domain），空串时回退产品 apiDomain。
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default)]
+    pub uid: String,
+    #[serde(default)]
+    pub nickname: String,
+    #[serde(default)]
+    pub phone: String,
+}
+
+impl BuddyCreds {
+    pub fn ready(&self) -> bool {
+        !self.access_token.is_empty()
+    }
+    pub fn refreshable(&self) -> bool {
+        !self.refresh_token.is_empty()
+    }
+    pub fn expired(&self) -> bool {
+        self.expires_at > 0 && self.expires_at <= crate::store::now_ms()
+    }
+}
+
+/// 一路 native 账号渠道（buddy / workbuddy / …）的登录态。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BuddyState {
+    #[serde(default)]
+    pub buddy: BuddyCreds,
+    #[serde(default)]
+    pub workbuddy: BuddyCreds,
+}
+
 /// Bookkeeping for the background keepalive loop (P1-3, OFM-style).
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct KeepaliveState {
-    /// source ("maodao" | "raccoon") → terminal block.
+    /// source ("maodao" | "raccoon" | "buddy" | "workbuddy") → terminal block.
     #[serde(default)]
     pub blocks: BTreeMap<String, BlockInfo>,
     #[serde(default)]
@@ -166,6 +219,9 @@ pub struct Credentials {
     pub raccoon: RaccoonCreds,
     #[serde(default)]
     pub maodao: MaodaoCreds,
+    /// Native Tencent-family channels (buddy / workbuddy).
+    #[serde(default)]
+    pub buddy: BuddyState,
     #[serde(default)]
     pub keepalive: KeepaliveState,
 }
@@ -204,9 +260,12 @@ pub struct ModelCache {
     /// Zen / OpenCode free-lane roster — anonymous `opencode.ai` gateway.
     #[serde(default)]
     pub zen: Vec<ModelEntry>,
-    /// OFM 聚合桥接：把 Our Free Model 的账号渠道（buddy/workbuddy/…）透传进来。
+    /// CodeBuddy (腾讯 CodeBuddy 国内版) — native OAuth channel.
     #[serde(default)]
-    pub ofm: Vec<ModelEntry>,
+    pub buddy: Vec<ModelEntry>,
+    /// WorkBuddy (国际版) — same OAuth protocol, different endpoint/UA.
+    #[serde(default)]
+    pub workbuddy: Vec<ModelEntry>,
     #[serde(default)]
     pub fetched_at_ms: i64,
     /// Callability verdicts, keyed by "<source>/<upstream_id>".
@@ -386,6 +445,22 @@ pub fn jwt_exp_ms(token: &str) -> Option<i64> {
     let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
     let exp = value.get("exp")?.as_i64()?;
     Some(exp * 1000)
+}
+
+/// Decode one base64url segment of a JWT to raw bytes (tolerates padded input).
+pub fn base64_url_decode(segment: &str) -> Option<Vec<u8>> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(segment).ok()
+}
+
+/// Decode a JWT `iat` claim to milliseconds; `None` when absent.
+pub fn jwt_iat_ms(token: &str) -> Option<i64> {
+    if token.is_empty() {
+        return None;
+    }
+    let payload = token.split('.').nth(1)?;
+    let decoded = base64_url_decode(payload)?;
+    let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    Some(value.get("iat")?.as_i64()? * 1000)
 }
 
 pub fn now_ms() -> i64 {

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod buddy;
 mod commands;
 mod dsh_connect;
 mod export;
@@ -7,7 +8,6 @@ mod keepalive;
 mod kilo;
 mod loomy;
 mod maodao;
-mod ofm;
 mod opencode;
 mod probe;
 mod raccoon;
@@ -65,7 +65,7 @@ fn main() {
                 opencode_runtime: tokio::sync::Mutex::new(None),
                 kilo: kilo::KiloClient::new(),
                 zen: zen::ZenClient::new(),
-                ofm: ofm::OfmClient::new(),
+                buddy: buddy::BuddyClient::new(),
                 zen_sessions: tokio::sync::Mutex::new(zen::load_session_map(&zen_dir)),
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
@@ -233,7 +233,10 @@ fn main() {
             commands::maodao_refresh,
             commands::kilo_refresh,
             commands::zen_refresh,
-            commands::ofm_refresh,
+            commands::buddy_login,
+            commands::buddy_refresh,
+            commands::workbuddy_login,
+            commands::workbuddy_refresh,
             commands::keepalive_run_once,
             commands::keepalive_status,
             commands::export_workbuddy,
