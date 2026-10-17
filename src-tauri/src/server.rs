@@ -28,6 +28,7 @@ use tokio::sync::{Mutex, Semaphore};
 use crate::kilo::KiloClient;
 use crate::loomy::LoomyClient;
 use crate::maodao::{self, MaodaoClient, MaodaoLogin};
+use crate::ofm::OfmClient;
 use crate::opencode::{OpenCodeClient, OpenCodeRuntime};
 use crate::raccoon::{ensure_fresh, RaccoonClient};
 use crate::store::{LedgerEntry, ModelEntry, Store};
@@ -54,6 +55,8 @@ pub struct AppState {
     /// `zen-sessions.json` (quota is accounted per session, so a fresh mint
     /// per request burns the pool and surfaces as 429 FreeUsageLimitError).
     pub zen_sessions: Mutex<HashMap<String, String>>,
+    /// OFM 聚合桥接客户端（读 ~/.our-free-model/settings.json 的 forwardKey）。
+    pub ofm: OfmClient,
     pub maodao: MaodaoClient,
     /// In-flight browser login for the Maodao upstream.
     pub maodao_login: Mutex<Option<MaodaoLogin>>,
@@ -129,6 +132,7 @@ pub fn client_model_id(entry: &ModelEntry) -> String {
         "maodao" => "Maodao",
         "kilo" => "Kilo",
         "zen" => "Zen",
+        "ofm" => "OFM",
         _ => "Loomy",
     };
     format!("{} · {}", prefix, entry.name)
@@ -196,7 +200,8 @@ pub async fn resolve_model(state: &AppState, requested: &str) -> Option<ModelEnt
         .chain(store.models.opencode.iter())
         .chain(store.models.maodao.iter())
         .chain(store.models.kilo.iter())
-        .chain(store.models.zen.iter());
+        .chain(store.models.zen.iter())
+        .chain(store.models.ofm.iter());
     let mut found = None;
     for entry in candidates {
         if client_model_id(entry) == requested || upstream_model_id(entry) == requested {
@@ -242,6 +247,7 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         .chain(store.models.maodao.iter())
         .chain(store.models.kilo.iter())
         .chain(store.models.zen.iter())
+        .chain(store.models.ofm.iter())
     {
         // A fresh failing verdict hides the model from clients.
         if !store.models.publishable(&entry.source, &entry.upstream_id) {
@@ -384,6 +390,16 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
         "kilo" => {
             // Keyless lane: no credential to load, nothing to keep fresh.
             match state.kilo.chat(&upstream_body).await {
+                Ok(r) => Upstream::Http(r),
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "ofm" => {
+            // Bridge to Our Free Model's standalone forward listener. OFM
+            // answers both stream true and false in standard OpenAI shape,
+            // so this is a straight pass-through (the model id already
+            // carries its `channel/` prefix, which is what OFM routes on).
+            match state.ofm.chat(&upstream_body).await {
                 Ok(r) => Upstream::Http(r),
                 Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
             }
@@ -689,6 +705,7 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let mut maodao_models = Vec::new();
     let mut kilo_models = Vec::new();
     let mut zen_models = Vec::new();
+    let mut ofm_models = Vec::new();
     for entry in store.models.loomy.iter() {
         loomy_models.push(model_json(&store, entry));
     }
@@ -706,6 +723,38 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     }
     for entry in store.models.zen.iter() {
         zen_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.ofm.iter() {
+        ofm_models.push(model_json(&store, entry));
+    }
+    // OFM 服务是否在线（配置可读 + 端口可连）——只读探测，不发消息。
+    let ofm_online = match crate::ofm::read_ofm_credentials() {
+        Ok((base, _)) => {
+            let hostport = base.trim_start_matches("http://").to_string();
+            hostport
+                .parse::<std::net::SocketAddr>()
+                .ok()
+                .map(|addr| {
+                    let stream = std::net::TcpStream::connect_timeout(
+                        &addr,
+                        std::time::Duration::from_millis(400),
+                    );
+                    stream.is_ok()
+                })
+                .unwrap_or(false)
+        }
+        Err(_) => false,
+    };
+    // 各渠道计数，供面板分行显示（渠道取 upstream_id 的 `/` 前缀）。
+    let mut ofm_by_channel: std::collections::BTreeMap<String, usize> = Default::default();
+    for entry in store.models.ofm.iter() {
+        let ch = entry
+            .upstream_id
+            .split('/')
+            .next()
+            .unwrap_or("ofm")
+            .to_string();
+        *ofm_by_channel.entry(ch).or_insert(0) += 1;
     }
     let active = store.credentials.loomy.active.clone();
     let loomy_session = store.credentials.loomy.sessions.iter().find(|s| Some(&s.name) == active.as_ref());
@@ -765,6 +814,17 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "loggedIn": true,
             "sessions": state.zen_sessions.lock().await.len(),
             "models": zen_models,
+        },
+        "ofm": {
+            // Bridge to Our Free Model's forward listener. The service being
+            // up is the "login" state here; per-channel counts drive the card.
+            "online": ofm_online,
+            "note": crate::ofm::bridge_note(),
+            "channels": ofm_by_channel
+                .iter()
+                .map(|(k, v)| json!({ "channel": k, "count": v }))
+                .collect::<Vec<_>>(),
+            "models": ofm_models,
         },
         // P1-3 keepalive loop state (rounds, notes, terminal blocks).
         "keepalive": crate::keepalive::keepalive_json(&store),

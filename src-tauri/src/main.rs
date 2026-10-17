@@ -7,6 +7,7 @@ mod keepalive;
 mod kilo;
 mod loomy;
 mod maodao;
+mod ofm;
 mod opencode;
 mod probe;
 mod raccoon;
@@ -64,6 +65,7 @@ fn main() {
                 opencode_runtime: tokio::sync::Mutex::new(None),
                 kilo: kilo::KiloClient::new(),
                 zen: zen::ZenClient::new(),
+                ofm: ofm::OfmClient::new(),
                 zen_sessions: tokio::sync::Mutex::new(zen::load_session_map(&zen_dir)),
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
@@ -231,6 +233,7 @@ fn main() {
             commands::maodao_refresh,
             commands::kilo_refresh,
             commands::zen_refresh,
+            commands::ofm_refresh,
             commands::keepalive_run_once,
             commands::keepalive_status,
             commands::export_workbuddy,

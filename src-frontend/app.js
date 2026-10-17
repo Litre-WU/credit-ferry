@@ -122,6 +122,21 @@
     $('zen-sessions').textContent = zn.sessions || 0;
     $('zen-status').textContent = '匿名公共池 · ' + zn.models.length + ' 个免费车道模型 · 会话映射 ' + (zn.sessions || 0) + ' 条';
 
+    // OFM 聚合桥接
+    var of = snap.ofm || { online: false, models: [], channels: [] };
+    $('ofm-models').textContent = of.models.length;
+    $('ofm-channels').textContent = (of.channels || []).length;
+    var ofmWarn = $('ofm-warn');
+    if (!of.online) {
+      $('ofm-status').textContent = 'OFM 服务未运行 — 启动 Our Free Model（standalone，127.0.0.1:18900）后点「刷新模型」';
+      ofmWarn.style.display = 'block';
+      ofmWarn.textContent = '⚠ 未检测到 OFM 转发口（127.0.0.1:18900）。桥接依赖 OFM 本体在运行；它负责这些账号渠道的登录、保活与每日签到。';
+    } else {
+      var chTxt = (of.channels || []).map(function (c) { return c.channel + ' ' + c.count; }).join(' · ');
+      $('ofm-status').textContent = '桥接在线 · ' + of.models.length + ' 个模型（' + (chTxt || '无渠道') + '）· 探针由 OFM 侧负责';
+      ofmWarn.style.display = 'none';
+    }
+
     // Keepalive (P1-3)
     var ka = snap.keepalive || { lastRunMs: 0, notes: [], blocks: [] };
     $('ka-last').textContent = ka.lastRunMs ? fmtTime(ka.lastRunMs) : '尚未巡检';
@@ -139,7 +154,7 @@
       blocksEl.style.display = 'none';
       blocksEl.innerHTML = '';
     }
-    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models);
+    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(of.models);
     $('model-count').textContent = all.length;
     var tbody = document.querySelector('#models-table tbody');
     if (!all.length) {
@@ -148,6 +163,7 @@
       tbody.innerHTML = all.map(function (m) {
         var mult = m.multiplier == null ? '—' : ('×' + m.multiplier);
         var status = (m.source === 'kilo' || m.source === 'zen') ? '<span class="badge free">免费池</span>'
+          : m.source === 'ofm' ? '<span class="badge ofm">账号池</span>'
           : m.billingStatus === 'limited_free' ? '<span class="badge free">限免</span>'
           : m.billingStatus === 'discount' ? '<span class="badge promo">折扣</span>'
           : '<span class="badge no">标准</span>';
@@ -156,6 +172,7 @@
           : m.source === 'maodao' ? '<span class="badge maodao">码道</span>'
           : m.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
           : m.source === 'zen' ? '<span class="badge zen">Zen</span>'
+          : m.source === 'ofm' ? '<span class="badge ofm">OFM</span>'
           : '<span class="badge loomy">Loomy</span>';
         var probe;
         if (m.probeOk === true) {
@@ -163,7 +180,9 @@
         } else if (m.probeOk === false) {
           probe = '<span class="badge no" style="color:#b91c1c;border-color:#fecaca;background:#fef2f2" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
         } else {
-          probe = '<span class="badge no" title="尚未验证">未验证</span>';
+          probe = m.source === 'ofm'
+            ? '<span class="badge ofm" title="可用性由 OFM 侧探测与账号轮转负责">桥接</span>'
+            : '<span class="badge no" title="尚未验证">未验证</span>';
         }
         var rowStyle = (m.probeOk === false) ? ' style="opacity:.55"' : '';
         return '<tr' + rowStyle + '><td><b>' + esc(m.clientId) + '</b></td>' +
@@ -189,6 +208,7 @@
           : e.source === 'maodao' ? '<span class="badge maodao">码道</span>'
           : e.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
           : e.source === 'zen' ? '<span class="badge zen">Zen</span>'
+          : e.source === 'ofm' ? '<span class="badge ofm">OFM</span>'
           : '<span class="badge loomy">Loomy</span>';
         var points = e.points == null ? '—' : e.points;
         var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
@@ -393,6 +413,23 @@
       btn.disabled = false;
       btn.textContent = '刷新模型';
       toast('Zen：' + r.models + ' 个免费车道模型');
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast(e);
+    });
+  });
+
+  // ---- OFM 聚合桥接 ----
+  $('btn-ofm-refresh').addEventListener('click', function () {
+    var btn = $('btn-ofm-refresh');
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    invoke('ofm_refresh').then(function (r) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast('OFM：桥接 ' + r.models + ' 个账号渠道模型');
       refresh();
     }).catch(function (e) {
       btn.disabled = false;

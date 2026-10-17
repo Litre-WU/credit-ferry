@@ -43,6 +43,7 @@
   .badge.maodao { background: #fff1f0; color: #cf1322; border: 1px solid #ffccc7; }
   .badge.kilo { background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; }
   .badge.zen { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
+  .badge.ofm { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
   .badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.no { background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb; }
   .badge.free { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
@@ -71,7 +72,7 @@
   <img class="logo" src="./icon.png" alt="">
   <div>
     <h1>CreditFerry 积分摆渡</h1>
-    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 → 本机 OpenAI 兼容口</div>
+    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · OFM 聚合 → 本机 OpenAI 兼容口</div>
   </div>
   <span id="server-pill" class="pill off">服务未启动</span>
 </div>
@@ -186,6 +187,19 @@
       </div>
       <div id="zen-status" class="muted" style="margin-top:8px"></div>
       <div class="muted" style="margin-top:6px;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e">⚠ 公共匿名池：<b>按会话配额限流</b>，用量大时可能返回 429（提示稍后重试，属车道配额而非本工具故障）；公共池内容同样不宜发送敏感信息。</div>
+    </div>
+
+    <!-- OFM 聚合桥接 -->
+    <div class="card">
+      <h2><span class="badge ofm">OFM</span> Our Free Model 聚合（账号渠道桥接）</h2>
+      <div class="desc">桥接 <span class="endpoint">127.0.0.1:18900</span> 的 OFM 转发口，把它的账号积分池渠道（CodeBuddy / WorkBuddy / 有道LobsterAI / Qoder / Qoder中国版 / TRAE / Cline免费 / MiniMax / ZCode）一并摆渡进来。<b>保活、每日签到、账号轮转全部由 OFM 本体负责</b>，本工具只透传，不二次探针（避免与 OFM 探测打架、浪费账号积分）。Loomy / 小浣熊 / 码道已由各自原生上游覆盖，此处不重复。</div>
+      <div class="row">
+        <button class="primary" id="btn-ofm-refresh">刷新模型</button>
+        <span class="stat"><b id="ofm-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="ofm-channels">—</b><span>渠道</span></span>
+      </div>
+      <div id="ofm-status" class="muted" style="margin-top:8px"></div>
+      <div id="ofm-warn" class="muted" style="margin-top:6px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#b91c1c;display:none"></div>
     </div>
   </div>
 

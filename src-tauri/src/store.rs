@@ -204,6 +204,9 @@ pub struct ModelCache {
     /// Zen / OpenCode free-lane roster — anonymous `opencode.ai` gateway.
     #[serde(default)]
     pub zen: Vec<ModelEntry>,
+    /// OFM 聚合桥接：把 Our Free Model 的账号渠道（buddy/workbuddy/…）透传进来。
+    #[serde(default)]
+    pub ofm: Vec<ModelEntry>,
     #[serde(default)]
     pub fetched_at_ms: i64,
     /// Callability verdicts, keyed by "<source>/<upstream_id>".

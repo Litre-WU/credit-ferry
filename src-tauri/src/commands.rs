@@ -117,6 +117,7 @@ pub async fn refresh_all(state: &Arc<AppState>) {
     let _ = maodao_refresh_inner(state).await;
     let _ = kilo_refresh_inner(state).await;
     let _ = zen_refresh_inner(state).await;
+    let _ = ofm_refresh_inner(state).await;
     // P1-3: keep the renewal loop alive regardless of the server toggle.
     start_keepalive(state);
 }
@@ -755,6 +756,33 @@ pub async fn zen_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn zen_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
     zen_refresh_inner(&ferry.state).await
+}
+
+// ---------------------------------------------------------------- ofm bridge
+
+/// Refresh the OFM bridge roster. Unlike the free lanes, this is NOT probed
+/// a second time: OFM already rotates accounts and maintains its own
+/// availability verdicts (and a probe would spend real account credits for a
+/// signal OFM is better placed to give). We trust its `/v1/models` roster.
+pub async fn ofm_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let models = state
+        .ofm
+        .catalog()
+        .await
+        .map_err(|e| format!("读取 OFM 模型失败：{}", e))?;
+    {
+        let mut store = state.store.lock().await;
+        store.models.ofm = models;
+        store.models.fetched_at_ms = now_ms();
+        store.save_models();
+    }
+    let count = state.store.lock().await.models.ofm.len();
+    Ok(json!({ "models": count }))
+}
+
+#[tauri::command]
+pub async fn ofm_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    ofm_refresh_inner(&ferry.state).await
 }
 
 // ---------------------------------------------------------------- export
