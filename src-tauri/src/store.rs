@@ -170,6 +170,12 @@ pub struct ModelCache {
     pub opencode: Vec<ModelEntry>,
     #[serde(default)]
     pub maodao: Vec<ModelEntry>,
+    /// Kilo free-pool roster — keyless lane, refreshed like any other source.
+    #[serde(default)]
+    pub kilo: Vec<ModelEntry>,
+    /// Zen / OpenCode free-lane roster — anonymous `opencode.ai` gateway.
+    #[serde(default)]
+    pub zen: Vec<ModelEntry>,
     #[serde(default)]
     pub fetched_at_ms: i64,
     /// Callability verdicts, keyed by "<source>/<upstream_id>".

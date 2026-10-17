@@ -31,7 +31,7 @@ fn probe_body(source: &str, model: &str) -> Value {
     let mut body = json!({
         "model": model,
         "messages": [{ "role": "user", "content": "hi" }],
-        "max_tokens": if source == "opencode" || source == "maodao" { 200 } else { 8 },
+        "max_tokens": if source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" { 200 } else { 8 },
     });
     if source == "maodao" {
         body["stream"] = json!(false);
@@ -48,11 +48,20 @@ pub async fn probe_source(state: &Arc<AppState>, source: &str) -> Vec<(String, S
             "raccoon" => &store.models.raccoon,
             "opencode" => &store.models.opencode,
             "maodao" => &store.models.maodao,
+            "kilo" => &store.models.kilo,
+            "zen" => &store.models.zen,
             _ => &store.models.loomy,
         };
         list.iter().map(|e| e.upstream_id.clone()).collect()
     };
-    let sem = Arc::new(Semaphore::new(CONCURRENCY));
+    // Maodao counts concurrent sessions per account, so probing it at the
+    // default width would trip its own limit.
+    let width = if source == "maodao" {
+        crate::server::MAODAO_CONCURRENCY
+    } else {
+        CONCURRENCY
+    };
+    let sem = Arc::new(Semaphore::new(width));
     let mut handles = Vec::new();
     for upstream_id in entries {
         let state = Arc::clone(state);
@@ -158,6 +167,63 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 Err(e) => Err(e),
             }
         }
+        "kilo" => {
+            // Keyless: the probe just needs the gateway to answer 2xx.
+            // Free-pool reasoning models can spend the whole budget on
+            // thinking and return an empty content — the HTTP status is
+            // still the honest verdict (same discipline as OpenCode).
+            match state.kilo.chat(&body).await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        Ok(())
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        Err(format!("upstream HTTP {}: {}", status.as_u16(), short(&text)))
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "zen" => {
+            // The lane's three gates apply to probes too: fingerprint headers,
+            // the bash+read tool declaration, and stream:true (a stream:false
+            // request 403s). Probes share ONE stable session (seed "probe") —
+            // minting fresh per request trips the per-session quota and reads
+            // as a wave of 429s instead of real verdicts.
+            // Lock order follows the chat path: store.dir first, then the
+            // session map, never the other way around.
+            let dir = { state.store.lock().await.dir.clone() };
+            let (session, changed) = {
+                let mut guard = state.zen_sessions.lock().await;
+                if let Some(s) = guard.get("probe") {
+                    (s.clone(), false)
+                } else {
+                    let minted = crate::zen::mint_session_id(now_ms() as u64, 1);
+                    guard.insert("probe".to_string(), minted.clone());
+                    (minted, true)
+                }
+            };
+            if changed {
+                let snapshot = state.zen_sessions.lock().await.clone();
+                tokio::task::spawn_blocking(move || crate::zen::save_session_map(&dir, &snapshot));
+            }
+            let mut body = body;
+            body["stream"] = json!(true);
+            crate::zen::apply_fingerprint(&mut body);
+            match state.zen.chat(&body, &session).await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        Ok(())
+                    } else {
+                        let text = resp.text().await.unwrap_or_default();
+                        Err(format!("upstream HTTP {}: {}", status.as_u16(), short(&text)))
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
         _ => {
             let session = {
                 let store = state.store.lock().await;
@@ -251,6 +317,8 @@ pub async fn needs_probe(state: &Arc<AppState>, source: &str) -> bool {
         "raccoon" => &store.models.raccoon,
         "opencode" => &store.models.opencode,
         "maodao" => &store.models.maodao,
+        "kilo" => &store.models.kilo,
+        "zen" => &store.models.zen,
         _ => &store.models.loomy,
     };
     list.iter()

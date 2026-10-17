@@ -3,6 +3,7 @@
 mod commands;
 mod dsh_connect;
 mod export;
+mod kilo;
 mod loomy;
 mod maodao;
 mod opencode;
@@ -10,6 +11,7 @@ mod probe;
 mod raccoon;
 mod server;
 mod store;
+mod zen;
 
 use std::sync::Arc;
 
@@ -51,17 +53,24 @@ fn main() {
                 app.handle().exit(0);
                 return Ok(());
             }
-            let state = Arc::new(AppState {
+            let state = {
+                let zen_dir = store.dir.clone();
+                Arc::new(AppState {
                 store: tokio::sync::Mutex::new(store),
                 loomy: loomy::LoomyClient::new(loomy::LOOMY_BASE),
                 raccoon: raccoon::RaccoonClient::new(),
                 opencode: opencode::OpenCodeClient::new(),
                 opencode_runtime: tokio::sync::Mutex::new(None),
+                kilo: kilo::KiloClient::new(),
+                zen: zen::ZenClient::new(),
+                zen_sessions: tokio::sync::Mutex::new(zen::load_session_map(&zen_dir)),
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
                 key,
                 sem: Arc::new(tokio::sync::Semaphore::new(server::MAX_CONCURRENCY)),
-            });
+                maodao_sem: Arc::new(tokio::sync::Semaphore::new(server::MAODAO_CONCURRENCY)),
+                })
+            };
             let ferry = Arc::new(Ferry {
                 state,
                 qr: tokio::sync::Mutex::new(None),
@@ -210,6 +219,8 @@ fn main() {
             commands::maodao_login_status,
             commands::maodao_logout,
             commands::maodao_refresh,
+            commands::kilo_refresh,
+            commands::zen_refresh,
             commands::export_workbuddy,
             commands::cleanup_workbuddy,
             commands::export_workbuddy_intl,

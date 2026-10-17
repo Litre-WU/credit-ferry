@@ -112,7 +112,16 @@
       : '未登录 — 点「浏览器登录」（会自动打开华为登录页），或从本机码道客户端导入';
 
     // Models
-    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models);
+    var kl = snap.kilo || { loggedIn: true, models: [] };
+    $('kilo-models').textContent = kl.models.length;
+    $('kilo-probe-stat').textContent = probeStat(kl.models);
+    $('kilo-status').textContent = '免登录 · ' + kl.models.length + ' 个免费池模型（目录随时可刷新）';
+    var zn = snap.zen || { loggedIn: true, models: [], sessions: 0 };
+    $('zen-models').textContent = zn.models.length;
+    $('zen-probe-stat').textContent = probeStat(zn.models);
+    $('zen-sessions').textContent = zn.sessions || 0;
+    $('zen-status').textContent = '匿名公共池 · ' + zn.models.length + ' 个免费车道模型 · 会话映射 ' + (zn.sessions || 0) + ' 条';
+    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models);
     $('model-count').textContent = all.length;
     var tbody = document.querySelector('#models-table tbody');
     if (!all.length) {
@@ -120,12 +129,15 @@
     } else {
       tbody.innerHTML = all.map(function (m) {
         var mult = m.multiplier == null ? '—' : ('×' + m.multiplier);
-        var status = m.billingStatus === 'limited_free' ? '<span class="badge free">限免</span>'
+        var status = (m.source === 'kilo' || m.source === 'zen') ? '<span class="badge free">免费池</span>'
+          : m.billingStatus === 'limited_free' ? '<span class="badge free">限免</span>'
           : m.billingStatus === 'discount' ? '<span class="badge promo">折扣</span>'
           : '<span class="badge no">标准</span>';
         var src = m.source === 'raccoon' ? '<span class="badge raccoon">小浣熊</span>'
           : m.source === 'opencode' ? '<span class="badge opencode">OpenCode</span>'
           : m.source === 'maodao' ? '<span class="badge maodao">码道</span>'
+          : m.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
+          : m.source === 'zen' ? '<span class="badge zen">Zen</span>'
           : '<span class="badge loomy">Loomy</span>';
         var probe;
         if (m.probeOk === true) {
@@ -157,6 +169,8 @@
         var src = e.source === 'raccoon' ? '<span class="badge raccoon">小浣熊</span>'
           : e.source === 'opencode' ? '<span class="badge opencode">OpenCode</span>'
           : e.source === 'maodao' ? '<span class="badge maodao">码道</span>'
+          : e.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
+          : e.source === 'zen' ? '<span class="badge zen">Zen</span>'
           : '<span class="badge loomy">Loomy</span>';
         var points = e.points == null ? '—' : e.points;
         var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
@@ -335,6 +349,40 @@
     }).catch(function (e) { toast(e); });
   });
 
+  // ---- Kilo：免登录车道 ----
+  $('btn-kilo-refresh').addEventListener('click', function () {
+    var btn = $('btn-kilo-refresh');
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    invoke('kilo_refresh').then(function (r) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast('Kilo：' + r.models + ' 个免费池模型');
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast(e);
+    });
+  });
+
+  // ---- Zen：OpenCode 匿名公共车道 ----
+  $('btn-zen-refresh').addEventListener('click', function () {
+    var btn = $('btn-zen-refresh');
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    invoke('zen_refresh').then(function (r) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast('Zen：' + r.models + ' 个免费车道模型');
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '刷新模型';
+      toast(e);
+    });
+  });
+
   // ---- 验证可调用性（三源通用） ----
   function probeClick(source, btn) {
     btn.disabled = true;
@@ -355,6 +403,8 @@
   $('btn-raccoon-probe').addEventListener('click', function () { probeClick('raccoon', this); });
   $('btn-oc-probe').addEventListener('click', function () { probeClick('opencode', this); });
   $('btn-maodao-probe').addEventListener('click', function () { probeClick('maodao', this); });
+  $('btn-kilo-probe').addEventListener('click', function () { probeClick('kilo', this); });
+  $('btn-zen-probe').addEventListener('click', function () { probeClick('zen', this); });
 
   $('btn-export-wb').addEventListener('click', function () {
     invoke('export_workbuddy').then(function (r) {

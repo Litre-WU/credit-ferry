@@ -3,12 +3,13 @@
 //! Mirrors the fences that made OC Ferry trustworthy:
 //! - Bearer key with a constant-time compare; a missing/wrong key is 401.
 //! - Any request carrying an `Origin` header is 403 (browsers stay out).
-//! - Request bodies capped at 8 MB (413); at most 4 concurrent forwards (429).
+//! - Request bodies capped at 8 MB (413); concurrent forwards are queued.
 //! - Model ids: the client-visible `Loomy · <name>` / `Raccoon · <name>`
 //!   and the upstream ids (`loomy/<id>` / `raccoon/<id>`) are both accepted.
 //! - SSE is passed through byte-for-byte; the stream is teed so the final
 //!   `usage` chunk (Loomy reports `points_consumed`) lands in the ledger.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,14 +25,20 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, Semaphore};
 
+use crate::kilo::KiloClient;
 use crate::loomy::LoomyClient;
 use crate::maodao::{self, MaodaoClient, MaodaoLogin};
 use crate::opencode::{OpenCodeClient, OpenCodeRuntime};
 use crate::raccoon::{ensure_fresh, RaccoonClient};
 use crate::store::{LedgerEntry, ModelEntry, Store};
+use crate::zen::{self, ZenClient};
 
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_CONCURRENCY: usize = 4;
+pub const MAX_CONCURRENCY: usize = 16;
+/// Maodao allows three concurrent sessions per account and its own desktop
+/// client holds some of them, so ferry traffic is serialised: a queued request
+/// waits, a fourth one would come back as `并发会话数已达上限(3个)`.
+pub const MAODAO_CONCURRENCY: usize = 1;
 
 pub struct AppState {
     pub store: Mutex<Store>,
@@ -39,17 +46,32 @@ pub struct AppState {
     pub raccoon: RaccoonClient,
     pub opencode: OpenCodeClient,
     pub opencode_runtime: Mutex<Option<OpenCodeRuntime>>,
+    /// Kilo free pool — keyless, so no credential lives beside the client.
+    pub kilo: KiloClient,
+    /// Zen free lane — anonymous gateway, per-conversation stable sessions.
+    pub zen: ZenClient,
+    /// seed (first-message digest) → minted session id; persisted to
+    /// `zen-sessions.json` (quota is accounted per session, so a fresh mint
+    /// per request burns the pool and surfaces as 429 FreeUsageLimitError).
+    pub zen_sessions: Mutex<HashMap<String, String>>,
     pub maodao: MaodaoClient,
     /// In-flight browser login for the Maodao upstream.
     pub maodao_login: Mutex<Option<MaodaoLogin>>,
     pub key: String,
     pub sem: Arc<Semaphore>,
+    /// Maodao counts concurrent sessions per account and rejects the fourth
+    /// (`并发会话数已达上限(3个)`), so its calls are queued separately from the
+    /// global limit — an agent client fires several requests per turn.
+    pub maodao_sem: Arc<Semaphore>,
 }
 
-/// What the three upstreams hand back after a chat call.
+/// What the upstreams hand back after a chat call.
 enum Upstream {
-    /// A raw upstream HTTP response to pass through (Loomy / Raccoon).
+    /// A raw upstream HTTP response to pass through (Loomy / Raccoon / Maodao / Kilo).
     Http(reqwest::Response),
+    /// An SSE response that must be folded back into one JSON completion —
+    /// the Zen lane answers 403 FreeTierError for `stream:false` requests.
+    HttpFoldSse(reqwest::Response),
     /// An already-translated OpenAI-shaped completion (OpenCode).
     Json(Value),
 }
@@ -93,6 +115,8 @@ pub fn client_model_id(entry: &ModelEntry) -> String {
         "raccoon" => "Raccoon",
         "opencode" => "OC",
         "maodao" => "Maodao",
+        "kilo" => "Kilo",
+        "zen" => "Zen",
         _ => "Loomy",
     };
     format!("{} · {}", prefix, entry.name)
@@ -100,6 +124,23 @@ pub fn client_model_id(entry: &ModelEntry) -> String {
 
 pub fn upstream_model_id(entry: &ModelEntry) -> String {
     format!("{}/{}", entry.source, entry.upstream_id)
+}
+
+/// The largest `max_tokens` the upstreams accept.
+///
+/// Catalogs report a model's theoretical output size (Maodao says 393216,
+/// OpenCode says 524288), but the gateways do not honour it: Maodao answers
+/// `max_tokens should be between 1 and 65536` and Loomy's nginx returns a bare
+/// 502 past that. A client that trusts the export therefore fails on every
+/// turn, so the ferry clamps instead and advertises the clamped number.
+pub const MAX_TOKENS_CAP: u64 = 65_536;
+
+/// Lower an oversized `max_tokens` to what the upstream will accept.
+pub fn clamp_max_tokens(body: &mut Value) {
+    let asked = body.get("max_tokens").and_then(|v| v.as_u64());
+    if asked.map(|n| n > MAX_TOKENS_CAP).unwrap_or(false) {
+        body["max_tokens"] = Value::from(MAX_TOKENS_CAP);
+    }
 }
 
 /// Drop `image_url` parts from `messages` for text-only upstreams.
@@ -141,7 +182,9 @@ pub async fn resolve_model(state: &AppState, requested: &str) -> Option<ModelEnt
         .iter()
         .chain(store.models.raccoon.iter())
         .chain(store.models.opencode.iter())
-        .chain(store.models.maodao.iter());
+        .chain(store.models.maodao.iter())
+        .chain(store.models.kilo.iter())
+        .chain(store.models.zen.iter());
     let mut found = None;
     for entry in candidates {
         if client_model_id(entry) == requested || upstream_model_id(entry) == requested {
@@ -185,6 +228,8 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         .chain(store.models.raccoon.iter())
         .chain(store.models.opencode.iter())
         .chain(store.models.maodao.iter())
+        .chain(store.models.kilo.iter())
+        .chain(store.models.zen.iter())
     {
         // A fresh failing verdict hides the model from clients.
         if !store.models.publishable(&entry.source, &entry.upstream_id) {
@@ -204,9 +249,11 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
     if let Some(err) = guard(&headers, &state.key) {
         return err;
     }
-    let _permit = match state.sem.try_acquire() {
+    // Wait for a slot rather than rejecting: an agent client fires a whole
+    // batch of requests per turn and a 429 reads to the user as "model broken".
+    let _permit = match state.sem.acquire().await {
         Ok(p) => p,
-        Err(_) => return json_error(StatusCode::TOO_MANY_REQUESTS, "At most four requests may run at once"),
+        Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "转发器已关闭"),
     };
 
     // Read the body with the 8 MB cap.
@@ -238,6 +285,7 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
     // Text-only upstreams (Loomy / Maodao) reject image content; strip it so a
     // multimodal client request still succeeds on a vision-less model.
     strip_image_content(&mut upstream_body, entry.vision);
+    clamp_max_tokens(&mut upstream_body);
 
     let response = match entry.source.as_str() {
         "opencode" => {
@@ -284,6 +332,10 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
             if let Some(obj) = upstream_body.as_object_mut() {
                 obj.insert("stream".into(), Value::Bool(stream));
             }
+            let _slot = match state.maodao_sem.acquire().await {
+                Ok(permit) => permit,
+                Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "码道限流器已关闭"),
+            };
             match state.maodao.chat(&creds, &upstream_body).await {
                 Ok(r) => Upstream::Http(r),
                 Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
@@ -307,6 +359,54 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
             }
             match state.raccoon.chat(&creds, &upstream_body).await {
                 Ok(r) => Upstream::Http(r),
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "kilo" => {
+            // Keyless lane: no credential to load, nothing to keep fresh.
+            match state.kilo.chat(&upstream_body).await {
+                Ok(r) => Upstream::Http(r),
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "zen" => {
+            // Anonymous lane. Three hard gates, all measured on this machine:
+            // (1) the full client fingerprint (minted session id, six x-opencode
+            // headers, opencode/ UA); (2) `bash`+`read` declared with non-empty
+            // schemas — 403 FreeTierError without them; (3) `stream:true` only —
+            // a stream:false request 403s, so a non-streaming client gets the
+            // folded SSE below.
+            // Quota is accounted per session, so one conversation = one stable
+            // minted id (first-message identity is replayed by every client).
+            let seed = zen::conversation_seed(&upstream_body);
+            let dir = { state.store.lock().await.dir.clone() };
+            let (session, changed) = {
+                let mut guard = state.zen_sessions.lock().await;
+                if let Some(s) = guard.get(&seed) {
+                    (s.clone(), false)
+                } else {
+                    let seq = (guard.len() % 4096) as u32 + 1;
+                    let minted = zen::mint_session_id(crate::store::now_ms() as u64, seq);
+                    guard.insert(seed, minted.clone());
+                    (minted, true)
+                }
+            };
+            if changed {
+                let snapshot = state.zen_sessions.lock().await.clone();
+                tokio::task::spawn_blocking(move || zen::save_session_map(&dir, &snapshot));
+            }
+            zen::apply_fingerprint(&mut upstream_body);
+            if let Some(obj) = upstream_body.as_object_mut() {
+                obj.insert("stream".into(), Value::Bool(true));
+            }
+            match state.zen.chat(&upstream_body, &session).await {
+                Ok(r) => {
+                    if stream {
+                        Upstream::Http(r)
+                    } else {
+                        Upstream::HttpFoldSse(r)
+                    }
+                }
                 Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
             }
         }
@@ -345,7 +445,31 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
             .body(Body::from(value.to_string()))
             .unwrap_or_default();
     }
+    // Zen non-stream: the lane insists on SSE; fold it back into one JSON
+    // completion for the client that asked for a plain body.
     let response = match response {
+        Upstream::HttpFoldSse(r) => {
+            let status = r.status();
+            let text = r.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        "{{\"error\":{{\"message\":\"upstream HTTP {}: {}\"}}}}",
+                        status.as_u16(),
+                        text.replace('"', "'").chars().take(300).collect::<String>()
+                    )))
+                    .unwrap_or_default();
+            }
+            let folded = zen::fold_sse(&text);
+            record_usage(&state, &entry, folded.get("usage")).await;
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(Body::from(folded.to_string()))
+                .unwrap_or_default();
+        }
         Upstream::Http(r) => r,
         Upstream::Json(_) => unreachable!(),
     };
@@ -544,6 +668,8 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let mut raccoon_models = Vec::new();
     let mut opencode_models = Vec::new();
     let mut maodao_models = Vec::new();
+    let mut kilo_models = Vec::new();
+    let mut zen_models = Vec::new();
     for entry in store.models.loomy.iter() {
         loomy_models.push(model_json(&store, entry));
     }
@@ -555,6 +681,12 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     }
     for entry in store.models.maodao.iter() {
         maodao_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.kilo.iter() {
+        kilo_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.zen.iter() {
+        zen_models.push(model_json(&store, entry));
     }
     let active = store.credentials.loomy.active.clone();
     let loomy_session = store.credentials.loomy.sessions.iter().find(|s| Some(&s.name) == active.as_ref());
@@ -599,6 +731,21 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "clientInstalled": maodao::client_installed(),
             "balance": store.ledger.maodao_balance,
             "models": maodao_models,
+        },
+        "kilo": {
+            // Keyless lane: always available, no login state to report —
+            // but the free pool logs prompts upstream, so the panel shows
+            // the privacy warning beside the roster.
+            "loggedIn": true,
+            "privacy": crate::kilo::privacy_note(),
+            "models": kilo_models,
+        },
+        "zen": {
+            // Anonymous public-pool lane (Bearer public): no login state,
+            // and the panel surfaces the per-session quota note instead.
+            "loggedIn": true,
+            "sessions": state.zen_sessions.lock().await.len(),
+            "models": zen_models,
         },
         "modelsFetchedAtMs": store.models.fetched_at_ms,
         "ledger": ledger,
@@ -649,6 +796,21 @@ pub async fn idle() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clamp_lowers_only_what_the_upstream_would_reject() {
+        let mut over = json!({ "max_tokens": 393216 });
+        clamp_max_tokens(&mut over);
+        assert_eq!(over["max_tokens"], Value::from(MAX_TOKENS_CAP));
+
+        let mut fits = json!({ "max_tokens": 512 });
+        clamp_max_tokens(&mut fits);
+        assert_eq!(fits["max_tokens"], Value::from(512));
+
+        let mut absent = json!({ "model": "m" });
+        clamp_max_tokens(&mut absent);
+        assert!(absent.get("max_tokens").is_none());
+    }
 
     fn multimodal() -> Value {
         json!({

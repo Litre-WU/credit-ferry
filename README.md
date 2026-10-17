@@ -1,8 +1,8 @@
 # CreditFerry 积分摆渡
 
-把 **Loomy（讯飞）**、**小浣熊（商汤）**、**OpenCode 免费模型池** 三个来源的模型，以本机 OpenAI 兼容口（`http://127.0.0.1:6666/v1`）摆渡给 **WorkBuddy / Qwen Code / DeepSeekHarness** 等客户端。Tauri 2（Rust + WebView）桌面应用，凭据只存本机。
+把 **Loomy（讯飞）**、**小浣熊（商汤）**、**OpenCode 免费模型池**、**华为码道 CodeArts Doer**、**Kilo 免费池**、**Zen/OpenCode 匿名车道** 六个来源的模型，以本机 OpenAI 兼容口（`http://127.0.0.1:6666/v1`）摆渡给 **WorkBuddy / Qoder / DeepSeekHarness** 等客户端。Tauri 2（Rust + WebView）桌面应用，凭据只存本机。
 
-![three sources](https://img.shields.io/badge/sources-Loomy%20%C2%B7%20Raccoon%20%C2%B7%20OpenCode-2563eb) ![tests](https://img.shields.io/badge/tests-4%20passed-047857)
+![sources](https://img.shields.io/badge/sources-6%20upstreams-2563eb) ![tests](https://img.shields.io/badge/tests-41%20passed-047857)
 
 ## 它能做什么
 
@@ -11,8 +11,11 @@
 | Loomy | 积分（响应 `usage.points_consumed` 真实回传） | 扫描本机客户端登录态 / 手动粘贴会话 | OpenAI 兼容直通 |
 | 小浣熊 | 积分（网关不回传单次积分，按余额快照展示） | 微信扫码（二维码本地生成） | OpenAI 兼容直通 |
 | OpenCode | 免费池（不扣积分） | 无需登录（隔离运行时自动就绪） | 信封协议翻译 |
+| 码道 | benefit token 池 | 浏览器 OAuth（PKCE＋DPoP）/ 从本机客户端导入 | APIG AKSK 签名直通 |
+| Kilo | 免费池（不扣积分，**提示词可能被上游记录**） | **无需登录、无需密钥**（免密车道） | OpenAI 兼容直通 |
+| Zen | 匿名公共池（`Bearer public`，按会话配额限流） | **无需登录**（客户端指纹＋稳定会话映射） | 仅流式（非流式客户端由工具折叠回 JSON） |
 
-客户端经 `POST /v1/chat/completions` 调用，模型 id 形如 `Loomy · Spark-X2.5` / `Raccoon · DeepSeek V4.1 Flash` / `OC · Big Pickle`。
+客户端经 `POST /v1/chat/completions` 调用，模型 id 形如 `Loomy · Spark-X2.5` / `Raccoon · DeepSeek V4.1 Flash` / `OC · Big Pickle` / `Maodao · DeepSeek V4 Flash` / `Kilo · Nemotron 3 Ultra` / `Zen · DeepSeek V4.1 Flash`。
 
 ## 快速开始
 
@@ -71,6 +74,8 @@ src-tauri/src/
   raccoon.rs    小浣熊上游：QR 登录/轮换、/model_catalog、/balance、chat
   opencode.rs   OpenCode：运行时获取/隔离启动、/provider 免费判定、信封翻译、审批拒绝
   maodao.rs     码道（华为 CodeArts Doer）：SDK-HMAC-SHA256 签名、DPoP/PKCE 登录、客户端密钥库导入
+  kilo.rs       Kilo 免费池：免密目录（isFree 过滤）+ OpenAI 兼容直通（隐私提示：提示词可能被上游记录）
+  zen.rs        Zen/OpenCode 匿名车道：mint ses_/msg_ 会话与请求号、六指纹头、bash+read 工具门、强制流式（非流式折叠）
   probe.rs      可调用性验证：逐模型探活 + TTL 结论（available/timeout/unavailable）
   export.rs     WorkBuddy / Qoder / DSH 配置合并与摘除
   dsh_connect.rs DSH 连接器平台：profile 发现、内核匹配版本、安装/启停/卸载与状态读取
@@ -83,6 +88,8 @@ src-frontend/   控制面板（原生 HTML/JS，无构建步骤）
 - 积分额度由各平台发放与回收，「不可用」只代表当时没通过校验；余额以平台客户端为准。
 - 小浣熊网关不回传单次积分消耗，面板与账本对该来源只记 token 与余额快照。
 - OpenCode 免费池随上游上下线；判定不缓存（每次启动重拉目录）。
+- Kilo 免费池无需登录但上游明示会记录免费车道提示词，勿发敏感内容；目录 400 行里只 `isFree` 切片可用（实测 17 个）。
+- Zen 车道只接受流式（`stream:false` 直接 403），按会话配额限流，用量大时 429 属车道配额非本工具故障；一段对话复用一个 mint 会话（存 `zen-sessions.json`），乱开新会话反而更快触顶。
 - 系统代理只支持手动 HTTP/HTTPS。
 - 本工具调用你在各平台自己的积分权益，请遵守对应服务条款。
 

@@ -85,6 +85,8 @@ pub async fn refresh_all(state: &Arc<AppState>) {
     let _ = raccoon_refresh_inner(state).await;
     let _ = opencode_refresh_inner(state).await;
     let _ = maodao_refresh_inner(state).await;
+    let _ = kilo_refresh_inner(state).await;
+    let _ = zen_refresh_inner(state).await;
 }
 
 /// After a catalogue refresh, verify any model that has never been probed
@@ -101,7 +103,7 @@ pub async fn auto_probe_if_needed(state: &Arc<AppState>, source: &str) {
 /// Verify every model of one source right now (panel button).
 #[tauri::command]
 pub async fn probe_models(ferry: FerryState<'_>, source: String) -> Result<Value, String> {
-    let source = if source == "raccoon" || source == "opencode" || source == "maodao" { source } else { "loomy".to_string() };
+    let source = if source == "raccoon" || source == "opencode" || source == "maodao" || source == "kilo" || source == "zen" { source } else { "loomy".to_string() };
     let verdicts = crate::probe::probe_source_bounded(&ferry.state, &source).await;
     crate::probe::save_verdicts(&ferry.state, &verdicts, &source).await;
     let ok = verdicts.iter().filter(|(_, v)| v.ok).count();
@@ -653,6 +655,58 @@ pub async fn maodao_refresh_inner(state: &Arc<AppState>) -> Result<Value, String
 #[tauri::command]
 pub async fn maodao_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
     maodao_refresh_inner(&ferry.state).await
+}
+
+// ---------------------------------------------------------------- kilo
+
+/// Refresh the Kilo free-pool roster. Keyless: no credential, just a listing
+/// round + (first time) a probe pass so dead ids never reach a client picker.
+pub async fn kilo_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let models = state
+        .kilo
+        .catalog()
+        .await
+        .map_err(|e| format!("读取 Kilo 模型失败：{}", e))?;
+    {
+        let mut store = state.store.lock().await;
+        store.models.kilo = models;
+        store.models.fetched_at_ms = now_ms();
+        store.save_models();
+    }
+    let count = state.store.lock().await.models.kilo.len();
+    auto_probe_if_needed(state, "kilo").await;
+    Ok(json!({ "models": count }))
+}
+
+#[tauri::command]
+pub async fn kilo_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    kilo_refresh_inner(&ferry.state).await
+}
+
+// ---------------------------------------------------------------- zen
+
+/// Refresh the Zen free-lane roster. Anonymous: no credential, just the
+/// listing + (first time) a probe pass.
+pub async fn zen_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let models = state
+        .zen
+        .catalog()
+        .await
+        .map_err(|e| format!("读取 Zen 模型失败：{}", e))?;
+    {
+        let mut store = state.store.lock().await;
+        store.models.zen = models;
+        store.models.fetched_at_ms = now_ms();
+        store.save_models();
+    }
+    let count = state.store.lock().await.models.zen.len();
+    auto_probe_if_needed(state, "zen").await;
+    Ok(json!({ "models": count }))
+}
+
+#[tauri::command]
+pub async fn zen_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    zen_refresh_inner(&ferry.state).await
 }
 
 // ---------------------------------------------------------------- export

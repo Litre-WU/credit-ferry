@@ -41,6 +41,8 @@
   .badge.raccoon { background: #fdf4ff; color: #a21caf; border: 1px solid #f5d0fe; }
   .badge.opencode { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.maodao { background: #fff1f0; color: #cf1322; border: 1px solid #ffccc7; }
+  .badge.kilo { background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; }
+  .badge.zen { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
   .badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.no { background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb; }
   .badge.free { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
@@ -69,7 +71,7 @@
   <img class="logo" src="./icon.png" alt="">
   <div>
     <h1>CreditFerry 积分摆渡</h1>
-    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 → 本机 OpenAI 兼容口</div>
+    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 → 本机 OpenAI 兼容口</div>
   </div>
   <span id="server-pill" class="pill off">服务未启动</span>
 </div>
@@ -156,6 +158,35 @@
       <div id="maodao-status" class="muted" style="margin-top:8px"></div>
       <div id="maodao-login-hint" class="muted hidden" style="margin-top:6px">已打开浏览器，请在华为登录页完成授权（约 5 分钟内有效）…</div>
     </div>
+
+    <!-- Kilo -->
+    <div class="card">
+      <h2><span class="badge kilo">Kilo</span> Kilo 免费池（免登录车道）</h2>
+      <div class="desc">api.kilo.ai 网关的 <span class="endpoint">isFree</span> 切片：无密钥、无登录、无指纹门，目录刷新即可用。列表里非免费的模型属于付费车道，本工具不会选入。</div>
+      <div class="row">
+        <button class="primary" id="btn-kilo-refresh">刷新模型</button>
+        <button id="btn-kilo-probe">验证可调用性</button>
+        <span class="stat"><b id="kilo-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="kilo-probe-stat">—</b><span>可调用/已验</span></span>
+      </div>
+      <div id="kilo-status" class="muted" style="margin-top:8px"></div>
+      <div class="muted" style="margin-top:6px;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e">⚠ 上游声明：免费车道的提示词<b>可能被 Kilo 记录并用于改进其服务</b>。此车道只用于可丢弃的工作，切勿发送密钥、隐私或公司敏感内容。</div>
+    </div>
+
+    <!-- Zen -->
+    <div class="card">
+      <h2><span class="badge zen">Zen</span> OpenCode Zen 免费车道（匿名公共池）</h2>
+      <div class="desc"><span class="endpoint">opencode.ai/inference/v1</span> 的匿名车道：公共池凭据（Bearer public），无个人登录。按会话计配额——工具已复刻 opencode 客户端指纹与稳定会话映射（一段对话一个会话，持久化在 zen-sessions.json）。该车道只接受流式上游，非流式客户端由工具折叠回 JSON。</div>
+      <div class="row">
+        <button class="primary" id="btn-zen-refresh">刷新模型</button>
+        <button id="btn-zen-probe">验证可调用性</button>
+        <span class="stat"><b id="zen-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="zen-probe-stat">—</b><span>可调用/已验</span></span>
+        <span class="stat"><b id="zen-sessions">—</b><span>会话映射</span></span>
+      </div>
+      <div id="zen-status" class="muted" style="margin-top:8px"></div>
+      <div class="muted" style="margin-top:6px;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e">⚠ 公共匿名池：<b>按会话配额限流</b>，用量大时可能返回 429（提示稍后重试，属车道配额而非本工具故障）；公共池内容同样不宜发送敏感信息。</div>
+    </div>
   </div>
 
   <div class="section-title">已发布模型（<span id="model-count">0</span>）<span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用</span></div>
@@ -233,7 +264,8 @@
     ② 所有凭据（会话、令牌）仅存本机数据目录（%APPDATA%\CreditFerry），不明文外传；转发口只听 127.0.0.1，浏览器来源一律拒绝。<br>
     ③ 退出本工具会把自己写入 WorkBuddy models.json 的条目摘除（你手写的配置不动）；小浣熊的扫码令牌轮换后会自动续期，失败需重新扫码。<br>
     ④ 「不可用」只代表当时没通过上游校验；积分余额以各平台客户端显示为准。<br>
-    ⑤ 平台追加/刷新后会自动逐个验证模型可调用性（Loomy / 小浣熊每次验证消耗极少量积分，OpenCode 免费池不消耗）；验证失败的模型不会提供给客户端。
+    ⑤ 平台追加/刷新后会自动逐个验证模型可调用性（Loomy / 小浣熊每次验证消耗极少量积分，OpenCode / Kilo / Zen 免费车道不消耗）；验证失败的模型不会提供给客户端。<br>
+    ⑥ Kilo 与 Zen 是无须登录的免费车道：Kilo 上游明示免费池提示词可能被记录；Zen 按会话配额限流（公共池，同样勿发敏感内容）。两者的凭据/会话映射只存本机数据目录。
   </div>
 </div>
 

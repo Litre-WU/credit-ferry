@@ -10,9 +10,22 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::server::client_model_id;
-use crate::store::Store;
+use crate::store::{ModelEntry, Store};
 
 pub const OWNER_FIELD: &str = "creditFerryOwner";
+
+/// The output size a client may safely ask for.
+///
+/// Catalogs report a model's theoretical maximum (Maodao says 393216) while the
+/// gateway's own range validator accepts far less, so exporting the raw number
+/// hands every client a request that comes back as a 400/502. Zero means the
+/// upstream never told us, and is left alone for each client's own default.
+fn advertised_max_output(entry: &ModelEntry) -> u64 {
+    if entry.max_output == 0 {
+        return 0;
+    }
+    entry.max_output.min(crate::server::MAX_TOKENS_CAP)
+}
 
 /// Resolve the WorkBuddy models.json path on Windows.
 pub fn resolve_models_file(store: &Store) -> Option<PathBuf> {
@@ -73,7 +86,7 @@ pub fn merge_models(document: &Value, models: &[crate::store::ModelEntry], endpo
             "supportsImages": entry.vision,
             "supportsReasoning": entry.multiplier.is_some(),
             "maxInputTokens": entry.context,
-            "maxOutputTokens": entry.max_output,
+            "maxOutputTokens": advertised_max_output(entry),
             OWNER_FIELD: crate::store::OWNER,
         }));
     }
@@ -167,6 +180,8 @@ fn export_models_json(store: &Store, file: &Path, endpoint: &str, key: &str) -> 
     models.extend(store.models.raccoon.clone());
     models.extend(store.models.opencode.clone());
     models.extend(store.models.maodao.clone());
+    models.extend(store.models.kilo.clone());
+    models.extend(store.models.zen.clone());
     // Models with a fresh failing verdict are not exported.
     models.retain(|m| store.models.publishable(&m.source, &m.upstream_id));
     let merged = merge_models(&document, &models, endpoint, key);
@@ -335,6 +350,8 @@ fn dsh_provider_block(store: &Store, endpoint: &str, indent: usize) -> (String, 
     models.extend(store.models.raccoon.clone());
     models.extend(store.models.opencode.clone());
     models.extend(store.models.maodao.clone());
+    models.extend(store.models.kilo.clone());
+    models.extend(store.models.zen.clone());
     models.retain(|m| store.models.publishable(&m.source, &m.upstream_id));
     if models.is_empty() {
         return (String::new(), 0);
@@ -353,8 +370,9 @@ fn dsh_provider_block(store: &Store, endpoint: &str, indent: usize) -> (String, 
         s.push_str(&format!("{}    - id: \"{}\"\n", pad, id));
         s.push_str(&format!("{}      name: \"{}\"\n", pad, id));
         s.push_str(&format!("{}      contextWindow: {}\n", pad, ctx));
-        if entry.max_output > 0 {
-            s.push_str(&format!("{}      maxTokens: {}\n", pad, entry.max_output));
+        let out = advertised_max_output(entry);
+        if out > 0 {
+            s.push_str(&format!("{}      maxTokens: {}\n", pad, out));
         }
     }
     s.push_str(&format!("{}{}\n", pad, DSH_BLOCK_TAIL));
@@ -601,6 +619,8 @@ fn export_qoder_settings(store: &Store, file: &Path, endpoint: &str, key: &str) 
     models.extend(store.models.raccoon.clone());
     models.extend(store.models.opencode.clone());
     models.extend(store.models.maodao.clone());
+    models.extend(store.models.kilo.clone());
+    models.extend(store.models.zen.clone());
     models.retain(|m| store.models.publishable(&m.source, &m.upstream_id));
     if models.is_empty() {
         return Err("没有可导出的模型（先刷新上游并通过验证）".to_string());
@@ -612,11 +632,12 @@ fn export_qoder_settings(store: &Store, file: &Path, endpoint: &str, key: &str) 
             // `model` goes on the wire, so it must be an id resolve_model
             // accepts — the prefixed client id, same as WorkBuddy exports.
             let id = client_model_id(entry);
+            let out = advertised_max_output(entry);
             json!({
                 "model": id.clone(),
                 "displayName": id,
                 "contextWindow": entry.context.max(128000) as u64,
-                "maxOutputTokens": if entry.max_output == 0 { 8192 } else { entry.max_output },
+                "maxOutputTokens": if out == 0 { 8192 } else { out },
                 "capabilities": {
                     "vision": entry.vision
                 }
@@ -747,6 +768,21 @@ mod tests {
             multiplier: Some(1.0),
             billing_status: None,
         }
+    }
+
+    #[test]
+    fn advertised_max_output_respects_the_upstream_ceiling() {
+        let mut maodao = entry("deepseek-v4.1-flash", "Maodao", "maodao");
+        maodao.max_output = 393216;
+        assert_eq!(advertised_max_output(&maodao), crate::server::MAX_TOKENS_CAP);
+        // An unknown output size stays unknown: each client has its own default.
+        maodao.max_output = 0;
+        assert_eq!(advertised_max_output(&maodao), 0);
+        // Every source is capped, because every gateway rejects the catalog size.
+        let mut raccoon = entry("sn-glm-5-3", "Raccoon", "raccoon");
+        raccoon.max_output = 100000;
+        assert_eq!(advertised_max_output(&raccoon), crate::server::MAX_TOKENS_CAP);
+        assert_eq!(advertised_max_output(&entry("m", "Loomy", "loomy")), 8192);
     }
 
     #[test]
