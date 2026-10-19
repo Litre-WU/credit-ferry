@@ -53,6 +53,11 @@
   var modelState = { q: '', source: '', onlyOk: true, page: 1 };
   var lastModelRows = [];
 
+  // ------------------------------------------------------------- 账本翻页状态
+  var ledgerState = { page: 1 };
+  var lastLedgerRows = [];
+  var lastLedgerTotal = 0;
+
   function sourceBadge(src) {
     var names = {
       raccoon: '小浣熊', opencode: 'OpenCode', maodao: '码道', kilo: 'Kilo', zen: 'Zen',
@@ -110,6 +115,37 @@
     $('model-page-info').textContent = '第 ' + modelState.page + ' / ' + pages + ' 页';
     $('btn-model-prev').disabled = modelState.page <= 1;
     $('btn-model-next').disabled = modelState.page >= pages;
+  }
+
+  function renderLedgerList() {
+    var lbody = document.querySelector('#ledger-table tbody');
+    var rows = lastLedgerRows;
+    var pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    if (ledgerState.page > pages) ledgerState.page = pages;
+    if (ledgerState.page < 1) ledgerState.page = 1;
+    // 新记录从顶部插入：保持当前页码不变会让内容漂移，但翻到最后一页
+    // 时新增会让总页数 +1 —— 钳制后回到有效区间即可，用户视角稳定。
+    var start = (ledgerState.page - 1) * PAGE_SIZE;
+    var pageRows = rows.slice(start, start + PAGE_SIZE);
+    $('ledger-count').textContent = '共 ' + (lastLedgerTotal || rows.length) + ' 条'
+      + (rows.length < lastLedgerTotal ? ('（面板仅载入最近 ' + rows.length + ' 条）') : '');
+    if (!pageRows.length) {
+      lbody.innerHTML = '<tr><td colspan="6" class="muted">暂无记录</td></tr>';
+    } else {
+      lbody.innerHTML = pageRows.map(function (e) {
+        var src = sourceBadge(e.source);
+        var points = e.points == null ? '—' : e.points;
+        var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
+        var kind = e.kind === 'reported' ? '<span class="badge ok">已扣分</span>'
+          : e.kind === 'balance' ? '<span class="badge no">余额快照</span>'
+          : '<span class="badge no">仅 token</span>';
+        return '<tr><td>' + fmtTime(e.tsMs) + '</td><td>' + src + '</td><td>' + esc(e.model) + '</td>' +
+          '<td>' + points + '</td><td>' + toks + '</td><td>' + kind + '</td></tr>';
+      }).join('');
+    }
+    $('ledger-page-info').textContent = '第 ' + ledgerState.page + ' / ' + pages + ' 页';
+    $('btn-ledger-prev').disabled = ledgerState.page <= 1;
+    $('btn-ledger-next').disabled = ledgerState.page >= pages;
   }
 
   // ------------------------------------------------------------- rendering
@@ -291,34 +327,13 @@
     }
     renderModelList();
 
-    // Ledger
+    // Ledger（翻页：state 更新后交给 renderLedgerList，不重置页码）
     $('ledger-loomy').textContent = snap.loomy.balance == null ? '—' : fmtNum(snap.loomy.balance);
     $('ledger-raccoon').textContent = snap.raccoon.balance == null ? '—' : fmtNum(snap.raccoon.balance);
     $('ledger-maodao').textContent = (snap.maodao && snap.maodao.balance != null) ? fmtNum(snap.maodao.balance) : '—';
-    var lbody = document.querySelector('#ledger-table tbody');
-    if (!snap.ledger.length) {
-      lbody.innerHTML = '<tr><td colspan="6" class="muted">暂无记录</td></tr>';
-    } else {
-      lbody.innerHTML = snap.ledger.map(function (e) {
-        var src = e.source === 'raccoon' ? '<span class="badge raccoon">小浣熊</span>'
-          : e.source === 'opencode' ? '<span class="badge opencode">OpenCode</span>'
-          : e.source === 'maodao' ? '<span class="badge maodao">码道</span>'
-          : e.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
-          : e.source === 'zen' ? '<span class="badge zen">Zen</span>'
-          : e.source === 'buddy' ? '<span class="badge buddy">CodeBuddy</span>'
-          : e.source === 'workbuddy' ? '<span class="badge workbuddy">WorkBuddy</span>'
-          : e.source === 'lobsterai' ? '<span class="badge lobsterai">LobsterAI</span>'
-          : e.source === 'trae' ? '<span class="badge trae">TRAE</span>'
-          : e.source === 'minimax' ? '<span class="badge minimax">MiniMax</span>'
-          : e.source === 'cline' ? '<span class="badge cline">Cline</span>'
-          : '<span class="badge loomy">Loomy</span>';
-        var points = e.points == null ? '—' : e.points;
-        var toks = (e.promptTokens == null ? '—' : e.promptTokens) + ' / ' + (e.completionTokens == null ? '—' : e.completionTokens);
-        var kind = e.kind === 'reported' ? '<span class="badge ok">已扣分</span>' : '<span class="badge no">仅 token</span>';
-        return '<tr><td>' + fmtTime(e.tsMs) + '</td><td>' + src + '</td><td>' + esc(e.model) + '</td>' +
-          '<td>' + points + '</td><td>' + toks + '</td><td>' + kind + '</td></tr>';
-      }).join('');
-    }
+    lastLedgerRows = snap.ledger;
+    lastLedgerTotal = snap.ledgerTotal || snap.ledger.length;
+    renderLedgerList();
   }
 
   function refresh() {
@@ -744,6 +759,12 @@
     if (okEl) okEl.addEventListener('change', function () { onFilter(true); });
     if ($('btn-model-prev')) $('btn-model-prev').addEventListener('click', function () { modelState.page -= 1; if (modelState.page < 1) modelState.page = 1; renderModelList(); });
     if ($('btn-model-next')) $('btn-model-next').addEventListener('click', function () { modelState.page += 1; renderModelList(); });
+  })();
+
+  // ---- 积分账本：翻页（每页 10 条） ----
+  (function bindLedgerList() {
+    if ($('btn-ledger-prev')) $('btn-ledger-prev').addEventListener('click', function () { ledgerState.page -= 1; if (ledgerState.page < 1) ledgerState.page = 1; renderLedgerList(); });
+    if ($('btn-ledger-next')) $('btn-ledger-next').addEventListener('click', function () { ledgerState.page += 1; renderLedgerList(); });
   })();
 
   // ---- 账号保活：立即巡检一轮 ----

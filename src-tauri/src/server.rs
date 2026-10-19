@@ -1098,7 +1098,9 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let opencode_running = opencode_runtime.is_some();
     let opencode_version = opencode_runtime.as_ref().map(|r| r.version.clone()).unwrap_or_default();
     drop(opencode_runtime);
-    let ledger: Vec<&LedgerEntry> = store.ledger.entries.iter().rev().take(30).collect();
+    // 面板账本取最近 200 条（前端翻页消费）；全量仍持久化在 ledger.json。
+    let ledger_total = store.ledger.entries.len() as u64;
+    let ledger: Vec<&LedgerEntry> = store.ledger.entries.iter().rev().take(200).collect();
     json!({
         "version": env!("CARGO_PKG_VERSION"),
         "endpoint": format!("http://127.0.0.1:{}/v1", store.settings.port),
@@ -1218,6 +1220,7 @@ pub async fn build_snapshot(state: &AppState) -> Value {
         "verifyAllRunning": state.verify_all_busy.load(std::sync::atomic::Ordering::SeqCst),
         "modelsFetchedAtMs": store.models.fetched_at_ms,
         "ledger": ledger,
+        "ledgerTotal": ledger_total,
     })
 }
 
