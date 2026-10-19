@@ -87,6 +87,52 @@
 </div>
 
 <div class="wrap">
+
+  <div class="section-title">模型列表 <span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用；仅「✓ 可调用」的模型会提供给客户端</span></div>
+  <div class="card">
+    <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
+      <input type="text" id="model-search" placeholder="搜索模型名称 / ID / 供应商…" style="max-width:280px">
+      <select id="model-source" style="font-family:inherit;font-size:13px;padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;background:#fff">
+        <option value="">全部供应商</option>
+      </select>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="model-only-ok" checked> 仅显示可调用</label>
+      <span class="muted" style="margin-left:auto;font-size:12px" id="model-count">共 0 个</span>
+    </div>
+    <table id="models-table">
+      <thead><tr>
+        <th>模型名称</th><th>供应商</th><th>客户端 ID</th><th>图片</th><th>上下文</th><th>输出上限</th><th>状态</th>
+      </tr></thead>
+      <tbody><tr><td colspan="7" class="muted">暂无模型 — 请先登录上游并刷新</td></tr></tbody>
+    </table>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <button class="small" id="btn-model-prev">← 上一页</button>
+      <span class="muted" style="font-size:12px" id="model-page-info">第 0 / 0 页</span>
+      <button class="small" id="btn-model-next">下一页 →</button>
+      <span class="muted" style="margin-left:auto;font-size:12px">每页 10 条；状态由「统一验证可调用性」探针测定，验证失败或未验证的模型不会提供给客户端，也不会写入导出配置。</span>
+    </div>
+  </div>
+
+  <div class="section-title">积分账本</div>
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <span class="stat"><b id="ledger-loomy">—</b><span>Loomy 余额</span></span>
+      <span class="stat"><b id="ledger-raccoon">—</b><span>小浣熊余额</span></span>
+      <span class="stat"><b id="ledger-maodao">—</b><span>码道 token 余额</span></span>
+      <span class="muted">Loomy 每次请求在 usage 里带回 <b>points_consumed</b>（真实扣分）；小浣熊网关不回传单次积分，此处仅记录 token 与余额快照。</span>
+    </div>
+    <table id="ledger-table">
+      <thead><tr><th>时间</th><th>来源</th><th>模型</th><th>积分</th><th>tokens (提示/补全)</th><th>类型</th></tr></thead>
+      <tbody><tr><td colspan="6" class="muted">暂无记录</td></tr></tbody>
+    </table>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <button class="small" id="btn-ledger-prev">← 上一页</button>
+      <span class="muted" style="font-size:12px" id="ledger-page-info">第 0 / 0 页</span>
+      <button class="small" id="btn-ledger-next">下一页 →</button>
+      <span class="muted" style="margin-left:auto;font-size:12px" id="ledger-count">共 0 条</span>
+    </div>
+  </div>
+
+
   <div class="grid">
     <!-- Loomy -->
     <div class="card">
@@ -327,50 +373,6 @@
     </div>
     <div id="ka-status" class="muted" style="margin-top:8px"></div>
     <div id="ka-blocks" class="muted" style="margin-top:6px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#b91c1c;display:none"></div>
-  </div>
-
-  <div class="section-title">模型列表 <span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用；仅「✓ 可调用」的模型会提供给客户端</span></div>
-  <div class="card">
-    <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
-      <input type="text" id="model-search" placeholder="搜索模型名称 / ID / 供应商…" style="max-width:280px">
-      <select id="model-source" style="font-family:inherit;font-size:13px;padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;background:#fff">
-        <option value="">全部供应商</option>
-      </select>
-      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="model-only-ok" checked> 仅显示可调用</label>
-      <span class="muted" style="margin-left:auto;font-size:12px" id="model-count">共 0 个</span>
-    </div>
-    <table id="models-table">
-      <thead><tr>
-        <th>模型名称</th><th>供应商</th><th>客户端 ID</th><th>图片</th><th>上下文</th><th>输出上限</th><th>状态</th>
-      </tr></thead>
-      <tbody><tr><td colspan="7" class="muted">暂无模型 — 请先登录上游并刷新</td></tr></tbody>
-    </table>
-    <div class="row" style="margin-top:10px;align-items:center">
-      <button class="small" id="btn-model-prev">← 上一页</button>
-      <span class="muted" style="font-size:12px" id="model-page-info">第 0 / 0 页</span>
-      <button class="small" id="btn-model-next">下一页 →</button>
-      <span class="muted" style="margin-left:auto;font-size:12px">每页 10 条；状态由「统一验证可调用性」探针测定，验证失败或未验证的模型不会提供给客户端，也不会写入导出配置。</span>
-    </div>
-  </div>
-
-  <div class="section-title">积分账本</div>
-  <div class="card">
-    <div class="row" style="margin-bottom:8px">
-      <span class="stat"><b id="ledger-loomy">—</b><span>Loomy 余额</span></span>
-      <span class="stat"><b id="ledger-raccoon">—</b><span>小浣熊余额</span></span>
-      <span class="stat"><b id="ledger-maodao">—</b><span>码道 token 余额</span></span>
-      <span class="muted">Loomy 每次请求在 usage 里带回 <b>points_consumed</b>（真实扣分）；小浣熊网关不回传单次积分，此处仅记录 token 与余额快照。</span>
-    </div>
-    <table id="ledger-table">
-      <thead><tr><th>时间</th><th>来源</th><th>模型</th><th>积分</th><th>tokens (提示/补全)</th><th>类型</th></tr></thead>
-      <tbody><tr><td colspan="6" class="muted">暂无记录</td></tr></tbody>
-    </table>
-    <div class="row" style="margin-top:10px;align-items:center">
-      <button class="small" id="btn-ledger-prev">← 上一页</button>
-      <span class="muted" style="font-size:12px" id="ledger-page-info">第 0 / 0 页</span>
-      <button class="small" id="btn-ledger-next">下一页 →</button>
-      <span class="muted" style="margin-left:auto;font-size:12px" id="ledger-count">共 0 条</span>
-    </div>
   </div>
 
   <div class="section-title">导出到客户端</div>
