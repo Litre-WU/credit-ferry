@@ -170,6 +170,17 @@
     var qst = (qd.loggedIn ? '国际版已登录' : '国际版未登录') + ' · ' + (qc.loggedIn ? '中国版已登录' : '中国版未登录')
       + ' · 目录 ' + (qd.models || []).length + '/' + (qc.models || []).length + ' · 推理受 WASM 签名限制（模型不发布）';
     $('qoder-status').textContent = qst;
+    var fb = snap.freebuff || { loggedIn: false, models: [], quota: null };
+    var fbFree = (fb.models || []).filter(function (m) { return m.billingStatus === '免费'; }).length;
+    $('freebuff-models').textContent = (fb.models || []).length;
+    $('freebuff-free-count').textContent = fbFree;
+    var fq = fb.quota || {};
+    $('freebuff-quota').textContent = (fb.loggedIn && fq.remaining != null) ? (fq.remaining + '/' + fq.limit) : '—';
+    $('freebuff-status').textContent = fb.loggedIn
+      ? ('已导入登录态' + (fb.nickname ? '：' + fb.nickname : '')
+          + (fq.remaining != null ? (' · 今日 freebucks ' + fq.remaining + '/' + fq.limit + '（已用 ' + (fq.spent || 0) + '，' + (fq.resetTimeZone || '') + ' 刷新）') : '')
+          + ' · 目录 ' + (fb.models || []).length + ' 个（纯免费 ' + fbFree + '）· 推理受 CLI 门控（模型不发布）')
+      : '未登录 — 装好 Freebuff 桌面客户端后点「从本机客户端导入」（读取 ~/.config/freebuff-desktop/state.json）';
 
     // Keepalive (P1-3)
     var ka = snap.keepalive || { lastRunMs: 0, notes: [], blocks: [] };
@@ -591,6 +602,41 @@
   $('btn-cline-login').addEventListener('click', function () { buddyLogin('cline', this); });
   $('btn-qoder-login').addEventListener('click', function () { buddyLogin('qoder', this); });
   $('btn-qodercn-login').addEventListener('click', function () { buddyLogin('qodercn', this); });
+
+  // ---- Freebuff (本机客户端导入 + 每日 freebucks 额度) ----
+  $('btn-freebuff-import').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = '导入中…';
+    invoke('freebuff_import_client').then(function (r) {
+      btn.disabled = false;
+      btn.textContent = '从本机客户端导入';
+      toast('已导入 Freebuff 登录态：' + (r.nickname || '—'));
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '从本机客户端导入';
+      toast(e);
+    });
+  });
+  $('btn-freebuff-refresh').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = '刷新中…';
+    invoke('freebuff_refresh').then(function (r) {
+      btn.disabled = false;
+      btn.textContent = '刷新额度与目录';
+      toast('Freebuff：' + r.models + ' 个模型');
+      refresh();
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '刷新额度与目录';
+      toast(e);
+    });
+  });
+  $('btn-freebuff-logout').addEventListener('click', function () {
+    invoke('freebuff_logout').then(function () { toast('已清除 Freebuff 登录态'); refresh(); }).catch(function (e) { toast(e); });
+  });
 
   // ---- 验证可调用性（三源通用） ----
   function probeClick(source, btn) {

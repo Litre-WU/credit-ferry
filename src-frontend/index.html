@@ -50,6 +50,7 @@
   .badge.minimax { background: #fefce8; color: #a16207; border: 1px solid #fde68a; }
   .badge.cline { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.qoder { background: #f4f4f5; color: #52525b; border: 1px solid #e4e4e7; }
+  .badge.freebuff { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
   .badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
   .badge.no { background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb; }
   .badge.free { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
@@ -78,7 +79,7 @@
   <img class="logo" src="./icon.png" alt="">
   <div>
     <h1>CreditFerry 积分摆渡</h1>
-    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax · Cline → 本机 OpenAI 兼容口</div>
+    <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax · Cline · Freebuff → 本机 OpenAI 兼容口</div>
   </div>
   <span id="server-pill" class="pill off">服务未启动</span>
 </div>
@@ -297,6 +298,21 @@
         <span class="stat"><b id="qoder-probe-stat">—</b><span>可调用/已验</span></span>
       </div>
       <div id="qoder-status" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- Freebuff / CodeBuff (每日免费额度上游) -->
+    <div class="card">
+      <h2><span class="badge freebuff">Freebuff</span> Freebuff（CodeBuff）每日免费额度</h2>
+      <div class="desc">登录态直接从本机桌面客户端导入（<code>~/.config/freebuff-desktop/state.json</code>）。每日 <b>freebucks 25 分</b>（0 点 Asia/Shanghai 刷新），<code>price=0</code> 的模型纯免费不扣分。<b>推理受限</b>：免费档被服务端强门控官方 CLI（直连 API 返回 <code>403 free_mode_cli_required</code> 并附封号警告），本工具不伪装 CLI 身份转发——仅接入目录与每日额度展示，模型<b>不发布到 /v1/models</b>。</div>
+      <div class="row">
+        <button class="primary" id="btn-freebuff-import">从本机客户端导入</button>
+        <button id="btn-freebuff-refresh">刷新额度与目录</button>
+        <button class="danger" id="btn-freebuff-logout">退出登录</button>
+        <span class="stat"><b id="freebuff-quota">—</b><span>今日剩余/总额</span></span>
+        <span class="stat"><b id="freebuff-models">—</b><span>模型</span></span>
+        <span class="stat"><b id="freebuff-free-count">—</b><span>纯免费</span></span>
+      </div>
+      <div id="freebuff-status" class="muted" style="margin-top:8px"></div>
     </div>
   </div>
 

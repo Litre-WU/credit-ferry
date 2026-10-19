@@ -273,6 +273,10 @@ pub struct Credentials {
     /// Native Qoder CN (中国版).
     #[serde(default)]
     pub qodercn: TokenCreds,
+    /// Freebuff (CodeBuff) — login import + catalog + daily freebucks only;
+    /// free-tier inference is CLI-gated upstream, so chat is not relayed.
+    #[serde(default)]
+    pub freebuff: TokenCreds,
     #[serde(default)]
     pub keepalive: KeepaliveState,
 }
@@ -329,6 +333,12 @@ pub struct ModelCache {
     /// Native Cline (OpenAI-compatible, device-code login).
     #[serde(default)]
     pub cline: Vec<ModelEntry>,
+    /// Freebuff (CodeBuff) roster — 目录仅供面板展示，推理 gated 不发布。
+    #[serde(default)]
+    pub freebuff: Vec<ModelEntry>,
+    /// Freebuff 每日 freebucks 额度快照（GET /session 提取，仅供展示）。
+    #[serde(default)]
+    pub freebuff_quota: Option<serde_json::Value>,
     #[serde(default)]
     pub fetched_at_ms: i64,
     /// Callability verdicts, keyed by "<source>/<upstream_id>".

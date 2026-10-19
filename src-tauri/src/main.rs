@@ -5,6 +5,7 @@ mod cline;
 mod commands;
 mod dsh_connect;
 mod export;
+mod freebuff;
 mod keepalive;
 mod kilo;
 mod loomy;
@@ -76,6 +77,7 @@ fn main() {
                 minimax: minimax::MinimaxClient::new(),
                 cline: cline::ClineClient::new(),
                 qoder: qoder::QoderClient::new(),
+                freebuff: freebuff::FreebuffClient::new(),
                 zen_sessions: tokio::sync::Mutex::new(zen::load_session_map(&zen_dir)),
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
@@ -258,6 +260,9 @@ fn main() {
             commands::cline_refresh,
             commands::qoder_login,
             commands::qodercn_login,
+            commands::freebuff_import_client,
+            commands::freebuff_refresh,
+            commands::freebuff_logout,
             commands::keepalive_run_once,
             commands::keepalive_status,
             commands::export_workbuddy,

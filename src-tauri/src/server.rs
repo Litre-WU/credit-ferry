@@ -34,6 +34,7 @@ use crate::maodao::{self, MaodaoClient, MaodaoLogin};
 use crate::minimax::MinimaxClient;
 use crate::opencode::{OpenCodeClient, OpenCodeRuntime};
 use crate::qoder::{self, QoderClient};
+use crate::freebuff::FreebuffClient;
 use crate::raccoon::{ensure_fresh, RaccoonClient};
 use crate::store::{LedgerEntry, ModelEntry, Store};
 use crate::trae::TraeClient;
@@ -72,6 +73,9 @@ pub struct AppState {
     pub cline: ClineClient,
     /// Qoder / Qoder CN (qoder.rs) — login + quota only; inference gated.
     pub qoder: QoderClient,
+    /// Freebuff / CodeBuff (freebuff.rs) — 登录态导入 + 目录 + 每日 freebucks
+    /// 额度展示；免费档推理被上游强门控到官方 CLI，chat 不转发（gated）。
+    pub freebuff: FreebuffClient,
     pub maodao: MaodaoClient,
     /// In-flight browser login for the Maodao upstream.
     pub maodao_login: Mutex<Option<MaodaoLogin>>,
@@ -153,6 +157,7 @@ pub fn client_model_id(entry: &ModelEntry) -> String {
         "trae" => "TRAE",
         "minimax" => "MiniMax",
         "cline" => "Cline",
+        "freebuff" => "Freebuff",
         _ => "Loomy",
     };
     format!("{} · {}", prefix, entry.name)
@@ -883,6 +888,7 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let mut cline_models = Vec::new();
     let mut qoder_models = Vec::new();
     let mut qodercn_models = Vec::new();
+    let mut freebuff_models = Vec::new();
     for entry in store.models.loomy.iter() {
         loomy_models.push(model_json(&store, entry));
     }
@@ -918,6 +924,9 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     }
     for entry in store.models.cline.iter() {
         cline_models.push(model_json(&store, entry));
+    }
+    for entry in store.models.freebuff.iter() {
+        freebuff_models.push(model_json(&store, entry));
     }
     // Qoder 目录仅展示（不发布到 /v1/models）：推理端点需 WASM 签名。
     qoder_models = qoder::fallback_models(qoder::QODER_SOURCE);
@@ -1034,6 +1043,15 @@ pub async fn build_snapshot(state: &AppState) -> Value {
             "models": qodercn_models,
             "gated": true,
             "gateNote": "同上（WASM 签名限制）；仅登录与每日额度可用。",
+        },
+        "freebuff": {
+            "loggedIn": store.credentials.freebuff.ready(),
+            "nickname": store.credentials.freebuff.nickname,
+            "expiresAtMs": store.credentials.freebuff.expires_at,
+            "models": freebuff_models,
+            "quota": store.models.freebuff_quota.clone().unwrap_or(Value::Null),
+            "gated": true,
+            "gateNote": "Freebuff 免费档推理被服务端强制要求官方 CLI（cost_mode:\"free\" 直连 API 返回 403 free_mode_cli_required，并附「可能封号」警告），本工具不伪装 CLI 身份转发；已接入登录态导入、模型目录与每日 freebucks 额度（25 分/日，0 点 Asia/Shanghai 刷新，price=0 为纯免费）。目录仅供查看，不发布到 /v1/models。",
         },
         // P1-3 keepalive loop state (rounds, notes, terminal blocks).
         "keepalive": crate::keepalive::keepalive_json(&store),

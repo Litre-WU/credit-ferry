@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::loomy::import_client_sessions;
 use crate::maodao::{self, MaodaoLoginStatus};
+use crate::freebuff;
 use crate::qoder;
 use crate::raccoon::{QrStatus, RaccoonClient};
 use crate::server::{self, AppState};
@@ -129,6 +130,7 @@ pub async fn refresh_all(state: &Arc<AppState>) {
     let _ = generic_refresh_inner(state, "lobsterai").await;
     let _ = generic_refresh_inner(state, "trae").await;
     let _ = generic_refresh_inner(state, "minimax").await;
+    let _ = freebuff_refresh_inner(state).await;
     // P1-3: keep the renewal loop alive regardless of the server toggle.
     start_keepalive(state);
 }
@@ -1679,6 +1681,70 @@ pub async fn lobsterai_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
 #[tauri::command]
 pub async fn trae_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
     generic_refresh_inner(&ferry.state, "trae").await
+}
+
+// ---------------------------------------------------------------- freebuff
+
+/// Import the Freebuff (CodeBuff) desktop login from
+/// ~/.config/freebuff-desktop/state.json — the same zero-touch pattern as
+/// loomy_import_client / maodao_import_client.
+#[tauri::command]
+pub async fn freebuff_import_client(ferry: FerryState<'_>) -> Result<Value, String> {
+    let imported = freebuff::import_local_state().map_err(|e| format!("导入 Freebuff 失败：{}", e))?;
+    let nickname = imported.nickname.clone();
+    {
+        let mut store = ferry.state.store.lock().await;
+        store.credentials.freebuff = imported.to_creds();
+        store.save_credentials();
+    }
+    let refreshed = freebuff_refresh_inner(&ferry.state).await;
+    Ok(json!({ "nickname": nickname, "refreshed": refreshed }))
+}
+
+/// Catalog + daily freebucks. Read-only GETs — no device signature needed —
+/// and never touch the session/admission endpoints, so refreshing costs
+/// nothing and cannot burn a daily slot.
+pub async fn freebuff_refresh_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    let creds = {
+        let store = state.store.lock().await;
+        store.credentials.freebuff.clone()
+    };
+    if !creds.ready() {
+        return Err("freebuff 未登录".into());
+    }
+    let catalog = state.freebuff.fetch_catalog(&creds).await
+        .map_err(|e| format!("读取 Freebuff 目录失败：{}", e))?;
+    let session = state.freebuff.fetch_session(&creds).await.unwrap_or_else(|_| json!({}));
+    let models = freebuff::FreebuffClient::build_models(&catalog, &session);
+    let quota = freebuff::FreebuffClient::extract_quota(&session);
+    let count = models.len();
+    {
+        let mut store = state.store.lock().await;
+        store.models.freebuff = models;
+        store.models.freebuff_quota = Some(quota.clone());
+        store.models.fetched_at_ms = now_ms();
+        store.save_models();
+    }
+    Ok(json!({ "models": count, "quota": quota }))
+}
+
+#[tauri::command]
+pub async fn freebuff_refresh(ferry: FerryState<'_>) -> Result<Value, String> {
+    freebuff_refresh_inner(&ferry.state).await
+}
+
+/// Forget the imported Freebuff token and its cached roster.
+#[tauri::command]
+pub async fn freebuff_logout(ferry: FerryState<'_>) -> Result<Value, String> {
+    {
+        let mut store = ferry.state.store.lock().await;
+        store.credentials.freebuff = TokenCreds::default();
+        store.save_credentials();
+        store.models.freebuff.clear();
+        store.models.freebuff_quota = None;
+        store.save_models();
+    }
+    Ok(json!({ "loggedOut": true }))
 }
 
 // ---------------------------------------------------------------- export
