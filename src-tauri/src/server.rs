@@ -97,6 +97,8 @@ pub struct AppState {
     /// P1-3: set once the keepalive loop has been spawned (compare_exchange
     /// guard so the loop is never started twice by different triggers).
     pub keepalive_started: std::sync::atomic::AtomicBool,
+    /// 统一验证（全渠道串行重探）互斥：重复点击不叠跑。
+    pub verify_all_busy: std::sync::atomic::AtomicBool,
 }
 
 /// What the upstreams hand back after a chat call.
@@ -1213,6 +1215,7 @@ pub async fn build_snapshot(state: &AppState) -> Value {
         },
         // P1-3 keepalive loop state (rounds, notes, terminal blocks).
         "keepalive": crate::keepalive::keepalive_json(&store),
+        "verifyAllRunning": state.verify_all_busy.load(std::sync::atomic::Ordering::SeqCst),
         "modelsFetchedAtMs": store.models.fetched_at_ms,
         "ledger": ledger,
     })

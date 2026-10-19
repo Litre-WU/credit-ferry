@@ -163,6 +163,38 @@ pub async fn probe_models(ferry: FerryState<'_>, source: String) -> Result<Value
     }))
 }
 
+/// 统一验证：全部可转发渠道串行重探（渠道内并发 3，渠道间串行以压低
+/// 同时打多家上游的限流概率）。后台跑，前端经 snapshot.verifyAllRunning
+/// 与每渠道 probeOk 看进度。Freebuff/Qoder 是 gated 目录（不转发推理），
+/// 不参与探针。
+pub const VERIFY_ALL_SOURCES: [&str; 12] = [
+    "loomy", "raccoon", "opencode", "maodao", "kilo", "zen",
+    "buddy", "workbuddy", "lobsterai", "trae", "minimax", "cline",
+];
+
+#[tauri::command]
+pub async fn verify_all_models(ferry: FerryState<'_>) -> Result<Value, String> {
+    let state = Arc::clone(&ferry.state);
+    if state
+        .verify_all_busy
+        .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("统一验证正在进行中，请等待本轮完成".into());
+    }
+    tauri::async_runtime::spawn(async move {
+        for source in VERIFY_ALL_SOURCES {
+            // 每渠道重探整目录：结果即时入库，面板轮询 snapshot 看进度。
+            let verdicts = crate::probe::probe_source(&state, source).await;
+            crate::probe::save_verdicts(&state, &verdicts, source).await;
+        }
+        // 全部渠道重探完成后补一轮 catalog 刷新，把新增/下架模型同步进目录。
+        refresh_all(&state).await;
+        state.verify_all_busy.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+    Ok(json!({ "started": true, "sources": VERIFY_ALL_SOURCES }))
+}
+
 // ---------------------------------------------------------------- opencode
 
 /// Bring up the isolated OpenCode runtime exactly once. The lock is held for

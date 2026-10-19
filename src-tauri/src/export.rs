@@ -789,6 +789,20 @@ mod tests {
         }
     }
 
+    /// 发布口径收紧后（2026-10-19：只保留验证可调用的模型），导出测试需要
+    /// 给条目配一个「探针成功」判定才会进导出列表。
+    fn verified(store: &mut crate::store::Store, source: &str, id: &str) {
+        store.models.probes.insert(
+            format!("{}/{}", source, id),
+            crate::store::StoredVerdict {
+                ok: true,
+                note: "可用（test）".into(),
+                at_ms: crate::store::now_ms(),
+                category: "available".into(),
+            },
+        );
+    }
+
     #[test]
     fn advertised_max_output_respects_the_upstream_ceiling() {
         let mut maodao = entry("deepseek-v4.1-flash", "Maodao", "maodao");
@@ -930,6 +944,7 @@ mod tests {
         let mut store = Store::open(tmp.join("store"));
         store.settings.dsh_file = Some(profile.to_string_lossy().to_string());
         store.models.loomy.push(entry("spark-x", "Spark X", "loomy"));
+        verified(&mut store, "loomy", "spark-x");
 
         // export inserts our block + refs key, preserving the user provider.
         let r = export_dsh(&store, "http://127.0.0.1:6666/v1", "KEY123").expect("export");
@@ -968,6 +983,7 @@ mod tests {
         let mut store = Store::open(tmp.join("store"));
         store.settings.dsh_file = Some(profile.to_string_lossy().to_string());
         store.models.loomy.push(entry("spark-x", "Spark X", "loomy"));
+        verified(&mut store, "loomy", "spark-x");
 
         let err = export_dsh(&store, "http://127.0.0.1:6666/v1", "K").unwrap_err();
         assert!(err.contains("providers:"), "unexpected error: {err}");

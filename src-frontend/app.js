@@ -48,6 +48,70 @@
 
   var qrPolling = null;
 
+  // ------------------------------------------------------------- 模型列表状态
+  var PAGE_SIZE = 10;
+  var modelState = { q: '', source: '', onlyOk: true, page: 1 };
+  var lastModelRows = [];
+
+  function sourceBadge(src) {
+    var names = {
+      raccoon: '小浣熊', opencode: 'OpenCode', maodao: '码道', kilo: 'Kilo', zen: 'Zen',
+      buddy: 'CodeBuddy', workbuddy: 'WorkBuddy', lobsterai: 'LobsterAI', trae: 'TRAE',
+      minimax: 'MiniMax', cline: 'Cline', freebuff: 'Freebuff', qoder: 'Qoder', qodercn: 'Qoder CN',
+      loomy: 'Loomy'
+    };
+    return '<span class="badge ' + src + '">' + (names[src] || src) + '</span>';
+  }
+
+  function filteredModels() {
+    var q = modelState.q.trim().toLowerCase();
+    return lastModelRows.filter(function (m) {
+      if (modelState.onlyOk && m.probeOk !== true) return false;
+      if (modelState.source && m.source !== modelState.source) return false;
+      if (q) {
+        var hay = (m.clientId + ' ' + m.name + ' ' + (m.upstreamId || '') + ' ' + m.source).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderModelList() {
+    var tbody = document.querySelector('#models-table tbody');
+    var rows = filteredModels();
+    var pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    if (modelState.page > pages) modelState.page = pages;
+    if (modelState.page < 1) modelState.page = 1;
+    var start = (modelState.page - 1) * PAGE_SIZE;
+    var pageRows = rows.slice(start, start + PAGE_SIZE);
+    $('model-count').textContent = '共 ' + rows.length + ' 个'
+      + (rows.length !== lastModelRows.length ? ('（总 ' + lastModelRows.length + '）') : '');
+    if (!pageRows.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted">'
+        + (lastModelRows.length ? '没有匹配当前筛选的模型' : '暂无模型 — 请先登录上游并刷新') + '</td></tr>';
+    } else {
+      tbody.innerHTML = pageRows.map(function (m) {
+        var st;
+        if (m.probeOk === true) {
+          st = '<span class="badge ok" title="' + esc(m.probeNote || '') + '">✓ 可调用</span>';
+        } else if (m.probeOk === false) {
+          st = '<span class="badge no" style="color:#b91c1c;border-color:#fecaca;background:#fef2f2" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
+        } else {
+          st = '<span class="badge no" title="尚未验证，点顶部「统一验证可调用性」">未验证</span>';
+        }
+        return '<tr><td><b>' + esc(m.name || m.clientId) + '</b></td>'
+          + '<td>' + sourceBadge(m.source) + '</td>'
+          + '<td class="muted" style="font-size:12px">' + esc(m.clientId) + '</td>'
+          + '<td>' + (m.vision ? '<span class="badge ok">✓</span>' : '<span class="badge no">—</span>') + '</td>'
+          + '<td>' + fmtNum(m.context) + '</td><td>' + fmtNum(m.maxOutput) + '</td>'
+          + '<td>' + st + '</td></tr>';
+      }).join('');
+    }
+    $('model-page-info').textContent = '第 ' + modelState.page + ' / ' + pages + ' 页';
+    $('btn-model-prev').disabled = modelState.page <= 1;
+    $('btn-model-next').disabled = modelState.page >= pages;
+  }
+
   // ------------------------------------------------------------- rendering
 
   function probeStat(models) {
@@ -59,6 +123,18 @@
   function render(snap) {
     $('endpoint-view').textContent = snap.endpoint;
     $('api-key-view').textContent = '••••••••' ;
+    // 统一验证进行中：按钮禁用 + 进度文案（snapshot 每 3 秒轮询带回）。
+    var vbtn = $('btn-verify-all'), vstat = $('verify-all-status');
+    if (snap.verifyAllRunning) {
+      if (vbtn) vbtn.disabled = true;
+      if (vstat) vstat.textContent = '统一验证进行中…';
+    } else {
+      if (vbtn) vbtn.disabled = false;
+      if (vstat && vstat.textContent === '统一验证进行中…') {
+        vstat.textContent = '验证完成';
+        setTimeout(function () { if (vstat) vstat.textContent = ''; }, 5000);
+      }
+    }
 
     // Loomy
     $('loomy-balance').textContent = snap.loomy.balance == null ? '—' : fmtNum(snap.loomy.balance);
@@ -199,47 +275,21 @@
       blocksEl.style.display = 'none';
       blocksEl.innerHTML = '';
     }
-    var all = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models).concat(cl.models);
-    $('model-count').textContent = all.length;
-    var tbody = document.querySelector('#models-table tbody');
-    if (!all.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="muted">暂无模型 — 请先登录上游并刷新</td></tr>';
-    } else {
-      tbody.innerHTML = all.map(function (m) {
-        var mult = m.multiplier == null ? '—' : ('×' + m.multiplier);
-        var status = (m.source === 'kilo' || m.source === 'zen') ? '<span class="badge free">免费池</span>'
-          : m.billingStatus === 'limited_free' ? '<span class="badge free">限免</span>'
-          : m.billingStatus === 'discount' ? '<span class="badge promo">折扣</span>'
-          : '<span class="badge no">标准</span>';
-        var src = m.source === 'raccoon' ? '<span class="badge raccoon">小浣熊</span>'
-          : m.source === 'opencode' ? '<span class="badge opencode">OpenCode</span>'
-          : m.source === 'maodao' ? '<span class="badge maodao">码道</span>'
-          : m.source === 'kilo' ? '<span class="badge kilo">Kilo</span>'
-          : m.source === 'zen' ? '<span class="badge zen">Zen</span>'
-          : m.source === 'buddy' ? '<span class="badge buddy">CodeBuddy</span>'
-          : m.source === 'workbuddy' ? '<span class="badge workbuddy">WorkBuddy</span>'
-          : m.source === 'lobsterai' ? '<span class="badge lobsterai">LobsterAI</span>'
-          : m.source === 'trae' ? '<span class="badge trae">TRAE</span>'
-          : m.source === 'minimax' ? '<span class="badge minimax">MiniMax</span>'
-          : m.source === 'cline' ? '<span class="badge cline">Cline</span>'
-          : '<span class="badge loomy">Loomy</span>';
-        var probe;
-        if (m.probeOk === true) {
-          probe = '<span class="badge ok" title="' + esc(m.probeNote || '') + '">✓ 可调用</span>';
-        } else if (m.probeOk === false) {
-          probe = '<span class="badge no" style="color:#b91c1c;border-color:#fecaca;background:#fef2f2" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
-        } else {
-          probe = '<span class="badge no" title="尚未验证">未验证</span>';
-        }
-        var rowStyle = (m.probeOk === false) ? ' style="opacity:.55"' : '';
-        return '<tr' + rowStyle + '><td><b>' + esc(m.clientId) + '</b></td>' +
-          '<td>' + src + '</td>' +
-          '<td><span class="badge ok">✓</span></td>' +
-          '<td>' + (m.vision ? '<span class="badge ok">✓</span>' : '<span class="badge no">—</span>') + '</td>' +
-          '<td>' + fmtNum(m.context) + '</td><td>' + fmtNum(m.maxOutput) + '</td>' +
-          '<td>' + mult + '</td><td>' + status + '</td><td>' + probe + '</td></tr>';
-      }).join('');
+    lastModelRows = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models).concat(cl.models);
+    // 供应商下拉只建一次（渠道集合固定）。
+    var sel = $('model-source');
+    if (sel && sel.options.length <= 1) {
+      var seen = {};
+      lastModelRows.forEach(function (m) { seen[m.source] = 1; });
+      Object.keys(seen).sort().forEach(function (s) {
+        var opt = document.createElement('option');
+        opt.value = s;
+        var names = { raccoon: '小浣熊', opencode: 'OpenCode', maodao: '码道', kilo: 'Kilo', zen: 'Zen', buddy: 'CodeBuddy', workbuddy: 'WorkBuddy', lobsterai: 'LobsterAI', trae: 'TRAE', minimax: 'MiniMax', cline: 'Cline', loomy: 'Loomy' };
+        opt.textContent = names[s] || s;
+        sel.appendChild(opt);
+      });
     }
+    renderModelList();
 
     // Ledger
     $('ledger-loomy').textContent = snap.loomy.balance == null ? '—' : fmtNum(snap.loomy.balance);
@@ -660,6 +710,41 @@
   $('btn-maodao-probe').addEventListener('click', function () { probeClick('maodao', this); });
   $('btn-kilo-probe').addEventListener('click', function () { probeClick('kilo', this); });
   $('btn-zen-probe').addEventListener('click', function () { probeClick('zen', this); });
+
+  // ---- 统一验证（全渠道） ----
+  $('btn-verify-all').addEventListener('click', function () {
+    var btn = $('btn-verify-all');
+    btn.disabled = true;
+    $('verify-all-status').textContent = '启动中…';
+    invoke('verify_all_models').then(function () {
+      toast('已开始统一验证：全渠道逐个重探，仅保留可调用模型');
+      $('verify-all-status').textContent = '统一验证进行中…';
+    }).catch(function (e) {
+      btn.disabled = false;
+      $('verify-all-status').textContent = '';
+      toast('启动失败：' + e);
+    });
+  });
+
+  // ---- 模型列表：搜索 / 筛选 / 翻页 ----
+  (function bindModelList() {
+    var qEl = $('model-search'), srcEl = $('model-source'), okEl = $('model-only-ok');
+    function onFilter(resetPage) {
+      modelState.q = qEl ? qEl.value : '';
+      modelState.source = srcEl ? srcEl.value : '';
+      modelState.onlyOk = okEl ? okEl.checked : true;
+      if (resetPage) modelState.page = 1;
+      renderModelList();
+    }
+    if (qEl) {
+      var deb;
+      qEl.addEventListener('input', function () { clearTimeout(deb); deb = setTimeout(function () { onFilter(true); }, 150); });
+    }
+    if (srcEl) srcEl.addEventListener('change', function () { onFilter(true); });
+    if (okEl) okEl.addEventListener('change', function () { onFilter(true); });
+    if ($('btn-model-prev')) $('btn-model-prev').addEventListener('click', function () { modelState.page -= 1; if (modelState.page < 1) modelState.page = 1; renderModelList(); });
+    if ($('btn-model-next')) $('btn-model-next').addEventListener('click', function () { modelState.page += 1; renderModelList(); });
+  })();
 
   // ---- 账号保活：立即巡检一轮 ----
   $('btn-keepalive-run').addEventListener('click', function () {

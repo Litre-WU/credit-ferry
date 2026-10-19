@@ -378,12 +378,13 @@ impl ModelCache {
     pub fn verdict(&self, source: &str, upstream_id: &str) -> Option<&StoredVerdict> {
         self.probes.get(&format!("{}/{}", source, upstream_id))
     }
-    /// A fresh FAILING verdict hides the model; anything else publishes it.
-    /// 限流判定（rate_limited）是账号级瞬时状态，不视为模型故障，不隐藏。
+    /// 发布口径（2026-10-19 收紧）：只保留**验证可调用**的模型——必须有过
+    /// 探针成功判定；未验证、失败（含限流/超时）都不提供给客户端，等待
+    /// 「统一验证」或 keepalive 重探成功后自动重新上架。
     pub fn publishable(&self, source: &str, upstream_id: &str) -> bool {
         match self.verdict(source, upstream_id) {
-            Some(v) => !(v.fresh() && !v.ok && v.category != "rate_limited"),
-            None => true,
+            Some(v) => v.ok,
+            None => false,
         }
     }
 }

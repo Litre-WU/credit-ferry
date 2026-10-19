@@ -86,6 +86,7 @@ fn main() {
                 maodao_sem: Arc::new(tokio::sync::Semaphore::new(server::MAODAO_CONCURRENCY)),
                 refresh_gate: tokio::sync::Mutex::new(()),
                 keepalive_started: std::sync::atomic::AtomicBool::new(false),
+                verify_all_busy: std::sync::atomic::AtomicBool::new(false),
                 })
             };
             let ferry = Arc::new(Ferry {
@@ -229,6 +230,7 @@ fn main() {
             commands::opencode_stop,
             commands::opencode_refresh,
             commands::probe_models,
+            commands::verify_all_models,
             commands::loomy_wechat_login,
             commands::loomy_import_client,
             commands::loomy_set_session,

@@ -81,7 +81,9 @@
     <h1>CreditFerry 积分摆渡</h1>
     <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax · Cline · Freebuff → 本机 OpenAI 兼容口</div>
   </div>
-  <span id="server-pill" class="pill off">服务未启动</span>
+  <button class="primary" id="btn-verify-all" style="margin-left:auto" title="全渠道串行重探每个模型的可用性，仅保留可调用者">统一验证可调用性</button>
+  <span id="verify-all-status" class="muted" style="font-size:12px"></span>
+  <span id="server-pill" class="pill off" style="margin-left:12px">服务未启动</span>
 </div>
 
 <div class="wrap">
@@ -327,15 +329,28 @@
     <div id="ka-blocks" class="muted" style="margin-top:6px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#b91c1c;display:none"></div>
   </div>
 
-  <div class="section-title">已发布模型（<span id="model-count">0</span>）<span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用</span></div>
+  <div class="section-title">模型列表 <span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用；仅「✓ 可调用」的模型会提供给客户端</span></div>
   <div class="card">
+    <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
+      <input type="text" id="model-search" placeholder="搜索模型名称 / ID / 供应商…" style="max-width:280px">
+      <select id="model-source" style="font-family:inherit;font-size:13px;padding:7px 10px;border:1px solid #d1d5db;border-radius:7px;background:#fff">
+        <option value="">全部供应商</option>
+      </select>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="model-only-ok" checked> 仅显示可调用</label>
+      <span class="muted" style="margin-left:auto;font-size:12px" id="model-count">共 0 个</span>
+    </div>
     <table id="models-table">
       <thead><tr>
-        <th>客户端可见 ID</th><th>来源</th><th>工具</th><th>图片</th><th>上下文</th><th>输出上限</th><th>积分倍率</th><th>计费</th><th>可调用</th>
+        <th>模型名称</th><th>供应商</th><th>客户端 ID</th><th>图片</th><th>上下文</th><th>输出上限</th><th>状态</th>
       </tr></thead>
-      <tbody><tr><td colspan="9" class="muted">暂无模型 — 请先登录上游并刷新</td></tr></tbody>
+      <tbody><tr><td colspan="7" class="muted">暂无模型 — 请先登录上游并刷新</td></tr></tbody>
     </table>
-    <div class="muted" style="margin-top:8px">倍率为 Loomy / 小浣熊的积分消耗系数；OpenCode 免费池不扣积分（<b>—</b>）。「可调用」列由验证探针实时测定（每次消耗极少量积分）；验证失败的模型不会提供给客户端，也不会写入导出配置。</div>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <button class="small" id="btn-model-prev">← 上一页</button>
+      <span class="muted" style="font-size:12px" id="model-page-info">第 0 / 0 页</span>
+      <button class="small" id="btn-model-next">下一页 →</button>
+      <span class="muted" style="margin-left:auto;font-size:12px">每页 10 条；状态由「统一验证可调用性」探针测定，验证失败或未验证的模型不会提供给客户端，也不会写入导出配置。</span>
+    </div>
   </div>
 
   <div class="section-title">积分账本</div>
