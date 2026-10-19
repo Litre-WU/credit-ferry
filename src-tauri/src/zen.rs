@@ -242,6 +242,7 @@ pub fn build_zen_catalog(ids: &[String]) -> Vec<ModelEntry> {
             max_output,
             multiplier: Some(0.0),
             billing_status: Some("免费车道（匿名公共池）".to_string()),
+        channel: None,
         });
     }
     out

@@ -83,6 +83,7 @@ pub fn cline_entry_of(row: &Value) -> ModelEntry {
         max_output,
         multiplier: None,
         billing_status: if is_free { Some("免费".to_string()) } else { None },
+        channel: None,
     }
 }
 

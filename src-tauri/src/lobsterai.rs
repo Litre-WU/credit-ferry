@@ -104,21 +104,35 @@ pub fn login_url(port: u16, state: &str) -> String {
 }
 
 /// 目录行 → ModelEntry。
+/// 真实响应字段（2026-10-19 直连 /api/models/available 实测）：
+/// data[].modelId / modelName / contextWindow / maxOutputTokens(偶缺) /
+/// supportsImage / costMultiplier —— 此前按 id/name/contextLength 读取导致
+/// upstream_id 全空、目录过滤成 0。兼容旧字段名以防后端改口。
 pub fn lobster_entry_of(row: &Value) -> ModelEntry {
-    let id = row.get("id").or_else(|| row.get("model")).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let name = row.get("name").or_else(|| row.get("displayName")).and_then(|v| v.as_str())
+    let id = row.get("modelId").or_else(|| row.get("id")).or_else(|| row.get("model"))
+        .and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let name = row.get("modelName").or_else(|| row.get("name")).or_else(|| row.get("displayName"))
+        .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty()).unwrap_or(&id).to_string();
-    let context = row.get("contextLength").or_else(|| row.get("context_window")).and_then(|v| v.as_u64()).unwrap_or(131_072);
-    let max_output = row.get("maxOutputTokens").or_else(|| row.get("max_tokens")).and_then(|v| v.as_u64()).unwrap_or(32_768);
+    let context = row.get("contextWindow").or_else(|| row.get("contextLength"))
+        .or_else(|| row.get("context_window")).and_then(|v| v.as_u64()).unwrap_or(131_072);
+    let max_output = row.get("maxOutputTokens").or_else(|| row.get("max_tokens"))
+        .and_then(|v| v.as_u64()).unwrap_or(32_768);
+    let vision = row.get("supportsImage").and_then(|v| v.as_bool()).unwrap_or(false);
+    let multiplier = row.get("costMultiplier").and_then(|v| v.as_f64());
+    let billing_status = row.get("limitedFreeActive").and_then(|v| v.as_bool())
+        .map(|b| if b { "限免".to_string() } else { String::new() })
+        .filter(|s| !s.is_empty());
     ModelEntry {
         upstream_id: id,
         name,
         source: LOBSTER_SOURCE.to_string(),
-        vision: false,
+        vision,
         context,
         max_output,
-        multiplier: None,
-        billing_status: None,
+        multiplier,
+        billing_status,
+        channel: None,
     }
 }
 

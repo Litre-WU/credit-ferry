@@ -195,6 +195,7 @@ impl FreebuffClient {
                 max_output: 0, // 目录未公布 maxOutput，诚实置 0
                 multiplier: price,
                 billing_status: Some(billing),
+        channel: None,
             })
         }).collect()
     }

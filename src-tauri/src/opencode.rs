@@ -533,6 +533,7 @@ impl OpenCodeClient {
                 max_output: m.get("limit").and_then(|l| l.get("output")).and_then(|v| v.as_u64()).unwrap_or(0),
                 multiplier: None,
                 billing_status: None,
+        channel: None,
             });
         }
         out.sort_by(|a, b| a.upstream_id.cmp(&b.upstream_id));

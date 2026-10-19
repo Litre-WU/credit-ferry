@@ -500,6 +500,7 @@ impl MaodaoClient {
                     max_output: num_field(&model, &["max_tokens", "maxTokens"]),
                     multiplier: None,
                     billing_status: Some("benefit".into()),
+        channel: None,
                 });
             }
         }

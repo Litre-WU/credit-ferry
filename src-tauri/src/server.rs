@@ -31,7 +31,7 @@ use crate::kilo::KiloClient;
 use crate::loomy::LoomyClient;
 use crate::lobsterai::LobsterClient;
 use crate::maodao::{self, MaodaoClient, MaodaoLogin};
-use crate::minimax::MinimaxClient;
+use crate::minimax::{self, MinimaxClient};
 use crate::opencode::{OpenCodeClient, OpenCodeRuntime};
 use crate::qoder::{self, QoderClient};
 use crate::freebuff::FreebuffClient;
@@ -106,7 +106,10 @@ enum Upstream {
     /// An SSE response that must be folded back into one JSON completion —
     /// the Zen lane answers 403 FreeTierError for `stream:false` requests.
     HttpFoldSse(reqwest::Response),
-    /// An already-translated OpenAI-shaped completion (OpenCode).
+    /// An Anthropic-protocol SSE stream (MiniMax) that must be translated to
+    /// OpenAI SSE on the fly.
+    HttpTranslate(reqwest::Response),
+    /// An already-translated OpenAI-shaped completion (OpenCode / MiniMax).
     Json(Value),
 }
 
@@ -279,6 +282,10 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         .chain(store.models.zen.iter())
         .chain(store.models.buddy.iter())
         .chain(store.models.workbuddy.iter())
+        .chain(store.models.lobsterai.iter())
+        .chain(store.models.trae.iter())
+        .chain(store.models.minimax.iter())
+        .chain(store.models.cline.iter())
     {
         // A fresh failing verdict hides the model from clients.
         if !store.models.publishable(&entry.source, &entry.upstream_id) {
@@ -481,56 +488,66 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                 Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
             }
         }
-        "lobsterai" | "trae" | "minimax" => {
-            // Native Bearer-token channels (lobsterai.rs / trae.rs / minimax.rs).
-            // Each refreshes its single-use RT under the global gate when the
-            // access token is near expiry, then streams; a non-streaming client
-            // gets the SSE folded back into one JSON completion.
+        "trae" => {
+            // TRAE SOLO: private event stream upstream; chat() folds it into
+            // one translated OpenAI completion (trae.rs translate_trae_sse),
+            // so this lane always yields Upstream::Json — no raw SSE passthrough.
             let source = entry.source.as_str();
             let mut creds = {
                 let store = state.store.lock().await;
-                match source {
-                    "lobsterai" => store.credentials.lobsterai.clone(),
-                    "trae" => store.credentials.trae.clone(),
-                    _ => store.credentials.minimax.clone(),
-                }
+                store.credentials.trae.clone()
             };
             if !creds.ready() {
                 return json_error(StatusCode::UNAUTHORIZED, &format!("{} 未登录", source));
             }
             if creds.expired() || creds.expires_at - crate::store::now_ms() < 5 * 60 * 1000 {
+                // TRAE 无独立 refresh 路径（TokenCreds 靠登录回调 RT 换取），
+                // 到期只能重新登录（与原实现一致）。
+                return json_error(StatusCode::UNAUTHORIZED,
+                    &format!("{} 会话已过期，请重新登录", source));
+            }
+            // 通道名必须与目录里的 function 匹配，否则上游在流内回 code=4001。
+            if let Some(ch) = &entry.channel {
+                if let Some(obj) = upstream_body.as_object_mut() {
+                    obj.insert("__channel".into(), Value::String(ch.clone()));
+                }
+            }
+            match state.trae.chat(&creds, &upstream_body, 0).await {
+                Ok(v) => Upstream::Json(v),
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "lobsterai" => {
+            // Native Bearer-token channel (lobsterai.rs). Refreshes its
+            // single-use RT under the global gate when the access token is
+            // near expiry, then streams; a non-streaming client gets the SSE
+            // folded back into one JSON completion.
+            let mut creds = {
+                let store = state.store.lock().await;
+                store.credentials.lobsterai.clone()
+            };
+            if !creds.ready() {
+                return json_error(StatusCode::UNAUTHORIZED, "lobsterai 未登录");
+            }
+            if creds.expired() || creds.expires_at - crate::store::now_ms() < 5 * 60 * 1000 {
                 let _gate = state.refresh_gate.lock().await;
-                let refreshed = match source {
-                    "lobsterai" => state.lobsterai.refresh(&mut creds).await,
-                    "trae" => Err("TRAE 暂未支持自动续期，请重新登录".to_string()),
-                    _ => state.minimax.refresh(&mut creds).await,
-                };
-                if let Err(e) = refreshed {
+                if let Err(e) = state.lobsterai.refresh(&mut creds).await {
                     drop(_gate);
                     if e.starts_with("REFRESH_TERMINAL") {
                         return json_error(StatusCode::UNAUTHORIZED,
-                            &format!("{} 会话已失效，请重新登录", source));
+                            "lobsterai 会话已失效，请重新登录");
                     }
                     return json_error(StatusCode::BAD_GATEWAY, &e);
                 }
                 let mut store = state.store.lock().await;
-                match source {
-                    "lobsterai" => store.credentials.lobsterai = creds.clone(),
-                    "trae" => store.credentials.trae = creds.clone(),
-                    _ => store.credentials.minimax = creds.clone(),
-                }
+                store.credentials.lobsterai = creds.clone();
                 store.save_credentials();
             }
             let client_stream = stream;
             if let Some(obj) = upstream_body.as_object_mut() {
                 obj.insert("stream".into(), Value::Bool(client_stream));
             }
-            let resp = match source {
-                "lobsterai" => state.lobsterai.chat(&creds, &upstream_body).await,
-                "trae" => state.trae.chat(&creds, &upstream_body, 0).await,
-                _ => state.minimax.chat(&creds, &upstream_body).await,
-            };
-            match resp {
+            match state.lobsterai.chat(&creds, &upstream_body).await {
                 Ok(r) => {
                     if client_stream {
                         Upstream::Http(r)
@@ -539,6 +556,60 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                     }
                 }
                 Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            }
+        }
+        "minimax" => {
+            // Anthropic-protocol native channel (minimax.rs). OpenAI-shaped
+            // request/response is produced by the translate layer there:
+            // stream:true → live Anthropic SSE → OpenAI SSE translation;
+            // stream:false → Anthropic message JSON folded to OpenAI here.
+            let mut creds = {
+                let store = state.store.lock().await;
+                store.credentials.minimax.clone()
+            };
+            if !creds.ready() {
+                return json_error(StatusCode::UNAUTHORIZED, "minimax 未登录");
+            }
+            if creds.expired() || creds.expires_at - crate::store::now_ms() < 5 * 60 * 1000 {
+                let _gate = state.refresh_gate.lock().await;
+                if let Err(e) = state.minimax.refresh(&mut creds).await {
+                    drop(_gate);
+                    if e.starts_with("REFRESH_TERMINAL") {
+                        return json_error(StatusCode::UNAUTHORIZED,
+                            "minimax 会话已失效，请重新登录");
+                    }
+                    return json_error(StatusCode::BAD_GATEWAY, &e);
+                }
+                let mut store = state.store.lock().await;
+                store.credentials.minimax = creds.clone();
+                store.save_credentials();
+            }
+            if let Some(obj) = upstream_body.as_object_mut() {
+                obj.insert("stream".into(), Value::Bool(stream));
+            }
+            let resp = match state.minimax.chat(&creds, &upstream_body).await {
+                Ok(r) => r,
+                Err(e) => return json_error(StatusCode::BAD_GATEWAY, &e),
+            };
+            if stream {
+                Upstream::HttpTranslate(resp)
+            } else {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if !status.is_success() {
+                    return json_error(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("minimax HTTP {}: {}", status.as_u16(),
+                            text.replace('"', "'").chars().take(300).collect::<String>()),
+                    );
+                }
+                let value: Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return json_error(StatusCode::BAD_GATEWAY, "minimax 响应不是 JSON");
+                    }
+                };
+                Upstream::Json(crate::minimax::translate_minimax_completion(&value))
             }
         }
         "cline" => {
@@ -657,6 +728,7 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
     }
     // Zen non-stream: the lane insists on SSE; fold it back into one JSON
     // completion for the client that asked for a plain body.
+    // MiniMax stream: translate Anthropic SSE → OpenAI SSE live.
     let response = match response {
         Upstream::HttpFoldSse(r) => {
             let status = r.status();
@@ -678,6 +750,30 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
                 .status(StatusCode::OK)
                 .header("content-type", "application/json")
                 .body(Body::from(folded.to_string()))
+                .unwrap_or_default();
+        }
+        Upstream::HttpTranslate(r) => {
+            let status = r.status();
+            if !status.is_success() {
+                let text = r.text().await.unwrap_or_default();
+                return Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        "{{\"error\":{{\"message\":\"upstream HTTP {}: {}\"}}}}",
+                        status.as_u16(),
+                        text.replace('"', "'").chars().take(300).collect::<String>()
+                    )))
+                    .unwrap_or_default();
+            }
+            let translated = translate_minimax_stream(r.bytes_stream(), state.clone(), entry.clone());
+            let body = Body::from_stream(translated);
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "text/event-stream")
+                .header("cache-control", "no-cache")
+                .header("connection", "keep-alive")
+                .body(body)
                 .unwrap_or_default();
         }
         Upstream::Http(r) => r,
@@ -816,6 +912,68 @@ fn tee_points(
         }
         futures_util::stream::iter(events)
     })
+}
+
+/// Translate an Anthropic-protocol SSE stream (MiniMax) into OpenAI SSE on
+/// the fly. The state machine buffers partial events (multi-byte safe) and
+/// emits whatever is complete; when the upstream ends we flush `finish()`
+/// so a client always sees a well-formed trailing chunk + `[DONE]`. The
+/// usage carried by `message_delta` is folded into the ledger.
+struct MiniMaxTranslateStream {
+    inner: futures_util::stream::BoxStream<'static, reqwest::Result<bytes::Bytes>>,
+    sm: minimax::AnthropicToOpenAI,
+    state: Arc<AppState>,
+    entry: ModelEntry,
+    done: bool,
+}
+
+impl futures_util::Stream for MiniMaxTranslateStream {
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.done {
+            return std::task::Poll::Ready(None);
+        }
+        match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+            std::task::Poll::Ready(Some(Ok(bytes))) => {
+                let out = self.sm.feed(&bytes);
+                std::task::Poll::Ready(Some(Ok(bytes::Bytes::from(out))))
+            }
+            std::task::Poll::Ready(Some(Err(e))) => {
+                std::task::Poll::Ready(Some(Err(std::io::Error::other(e.to_string()))))
+            }
+            std::task::Poll::Ready(None) => {
+                self.done = true;
+                let tail = self.sm.finish();
+                if let Some(u) = self.sm.usage().cloned() {
+                    let state = self.state.clone();
+                    let entry = self.entry.clone();
+                    tokio::spawn(async move {
+                        record_usage(&state, &entry, Some(&u)).await;
+                    });
+                }
+                std::task::Poll::Ready(Some(Ok(bytes::Bytes::from(tail))))
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+fn translate_minimax_stream(
+    upstream: impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + 'static,
+    state: Arc<AppState>,
+    entry: ModelEntry,
+) -> impl futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send {
+    MiniMaxTranslateStream {
+        inner: upstream.boxed(),
+        sm: minimax::AnthropicToOpenAI::new(),
+        state,
+        entry,
+        done: false,
+    }
 }
 
 /// Fold one usage object into the ledger.

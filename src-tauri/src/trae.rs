@@ -44,8 +44,15 @@ pub const CONSOLE_HOST: &str = "https://www.trae.cn";
 pub const CLIENT_ID: &str = "en1oxy7wnw8j9n";
 pub const APP_ID: &str = "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8";
 pub const IDE_VERSION: &str = "0.1.52";
+/// ideVersionCode / appVersionCode（OFM business.mjs L39250），catalog 请求头需带。
+pub const IDE_VERSION_CODE: &str = "20260811";
 pub const PLUGIN_VERSION: &str = "2.3.62834";
 pub const BATCH_MODELS_PATH: &str = "/api/ide/v1/batch_get_detail_param";
+/// SOLO chat 端点（OFM send() L40639 agentHost + 此路径，实测唯一可用路径；
+/// 旧 /mcp/v1/chat 已 404）。强制 stream:true。
+pub const SOLO_CHAT_PATH: &str = "/api/agent/v3/llm_utils_chat";
+/// 通道缺省值（OFM TRAE.product.function = "solo_work_lite"）。
+pub const TRAE_FUNCTION_DEFAULT: &str = "solo_work_lite";
 pub const EXCHANGE_PATH: &str = "/cloudide/api/v3/trae/oauth/ExchangeToken";
 /// 授权页路径（模仿 OFM buildTraeLoginURL：consoleHost + "/authorization"）。
 pub const AUTHORIZATION_PATH: &str = "/authorization";
@@ -199,35 +206,323 @@ pub fn classify_trae_error(msg: &str) -> &'static str {
     "other"
 }
 
-pub fn trae_entry_of(row: &Value) -> ModelEntry {
-    let id = row.get("id").or_else(|| row.get("model")).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let name = row.get("name").or_else(|| row.get("displayName")).and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty()).unwrap_or(&id).to_string();
-    let context = row.get("contextLength").or_else(|| row.get("context_window")).and_then(|v| v.as_u64()).unwrap_or(200_000);
-    let max_output = row.get("maxOutputTokens").or_else(|| row.get("max_tokens")).and_then(|v| v.as_u64()).unwrap_or(32_000);
-    ModelEntry {
+/// 通道优先级（OFM business.mjs L39199 resolveChannelList fallback）——
+/// 通用通道在前，专用通道兜底。同一 model id 出现在多通道时取优先级最高者。
+const TRAE_CHANNELS: &[&str] = &[
+    "solo_agent",
+    "solo_work_lite",
+    "solo_agent_remote",
+    "solo_work_remote",
+    "solo_agent_lite",
+    "chat_v3",
+    "builder_v3",
+    "solo_coder",
+    "solo_design_lite",
+    "solo_design_remote",
+    "git_ai",
+    "code_reviewer",
+    "code_review_summary",
+    "multimodal",
+    "system_diagnosis",
+];
+
+/// 请求的 function 全集（OFM fetchModels L46360 bodyObj.functions）——
+/// 空 body 会让服务端只回 `allow_tenant_user_add_model` 而无 function_configs，
+/// 故必须显式带上这组 function 名。
+const TRAE_FUNCTIONS: &[&str] = &[
+    "ui_builder_v2", "solo_coder", "chat_v3", "solo_builder", "builder_v3", "builder",
+    "chat", "inline_chat", "git_ai", "custom_agent_generation", "utils", "code_reviewer",
+    "code_review_summary", "solo_agent", "solo_agent_remote", "solo_work_remote",
+    "solo_agent_lite", "solo_work_lite", "solo_design_lite", "solo_design_remote",
+    "multimodal", "system_diagnosis",
+];
+
+fn s<'a>(entry: &'a Value, k: &str) -> Option<&'a str> {
+    entry.get(k).and_then(|v| v.as_str())
+}
+fn b(entry: &Value, k: &str) -> Option<bool> {
+    entry.get(k).and_then(|v| v.as_bool())
+}
+
+/// context_window_tokens.dev → .max（OFM readContextWindowField）。
+fn trae_context(entry: &Value) -> Option<u64> {
+    let raw = entry.get("context_window_tokens").or_else(|| entry.get("ContextWindowTokens"))?;
+    raw.get("dev").or_else(|| raw.get("Dev"))
+        .or_else(|| raw.get("max")).or_else(|| raw.get("Max"))
+        .and_then(|v| v.as_u64()).filter(|n| *n > 0)
+}
+
+/// model_detail_list[] 里优先 __dev 后缀的 max_tokens（OFM readDetailMaxTokens）。
+fn trae_max_output(entry: &Value) -> Option<u64> {
+    let details = entry.get("model_detail_list").or_else(|| entry.get("ModelDetailList"))?.as_array()?;
+    let chosen = details.iter()
+        .filter(|d| d.is_object())
+        .find(|d| s(d, "model_name").unwrap_or("").ends_with("__dev"))
+        .or_else(|| details.iter().find(|d| d.is_object()))?;
+    chosen.get("max_tokens").or_else(|| chosen.get("MaxTokens"))
+        .and_then(|v| v.as_u64()).filter(|n| *n > 0)
+}
+
+/// 一条 config_info_list 条目 → ModelEntry（OFM parseTraeConfigEntry）。
+/// 返回 None 表示非 chat 模型（usage 非 chat_completion）或被禁用/隐藏。
+pub fn trae_entry_of(row: &Value) -> Option<ModelEntry> {
+    let id = s(row, "config_name").or_else(|| s(row, "ConfigName")).unwrap_or("").trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let usage = s(row, "usage").or_else(|| s(row, "Usage")).unwrap_or("");
+    if !usage.is_empty() && usage != "chat_completion" {
+        return None;
+    }
+    // config_switch=false 关闭；is_invisible_to_user=true 隐藏。缺字段按放行。
+    if b(row, "config_switch").or_else(|| b(row, "ConfigSwitch")) == Some(false) {
+        return None;
+    }
+    if b(row, "is_invisible_to_user").or_else(|| b(row, "IsInvisibleToUser")) == Some(true) {
+        return None;
+    }
+    let display = row.get("display_config").or_else(|| row.get("DisplayConfig"));
+    let name = display
+        .and_then(|d| s(d, "display_name").or_else(|| s(d, "DisplayName")))
+        .filter(|t| !t.is_empty())
+        .unwrap_or(&id)
+        .to_string();
+    let vision = display.and_then(|d| b(d, "multimodal").or_else(|| b(d, "Multimodal"))).unwrap_or(false);
+    let context = trae_context(row).unwrap_or(200_000);
+    let max_output = trae_max_output(row).unwrap_or(32_000);
+    Some(ModelEntry {
         upstream_id: id,
         name,
         source: TRAE_SOURCE.to_string(),
-        vision: false,
+        vision,
         context,
         max_output,
         multiplier: None,
         billing_status: None,
+        channel: None,
+    })
+}
+
+/// function_configs[] → 去重后的目录（OFM parseTraeBatchModelList）。
+pub fn build_trae_catalog(groups: &[Value]) -> Vec<ModelEntry> {
+    let rank_of = |c: &str| TRAE_CHANNELS.iter().position(|x| *x == c);
+    let mut by_id: std::collections::HashMap<String, (ModelEntry, usize)> = std::collections::HashMap::new();
+    for g in groups {
+        let channel = match s(g, "function").or_else(|| s(g, "Function")) {
+            Some(c) if rank_of(c).is_some() => c.to_string(),
+            _ => continue,
+        };
+        let rank = rank_of(&channel).unwrap();
+        let list = match g.get("config_info_list").or_else(|| g.get("ConfigInfoList")).and_then(|v| v.as_array()) {
+            Some(l) => l,
+            None => continue,
+        };
+        for item in list {
+            if let Some(mut e) = trae_entry_of(item) {
+                e.source = TRAE_SOURCE.to_string();
+                e.channel = Some(channel.clone());
+                match by_id.get_mut(&e.upstream_id) {
+                    Some((_, best_rank)) if *best_rank <= rank => {}
+                    Some((slot, best_rank)) => { *slot = e.clone(); *best_rank = rank; }
+                    None => { by_id.insert(e.upstream_id.clone(), (e, rank)); }
+                }
+            }
+        }
+    }
+    by_id.into_values().map(|(e, _)| e).collect()
+}
+
+/// OpenAI 形态请求体 → SOLO 形态（OFM transformToSOLOBody + transformSOLOMessage）。
+/// `channel` 是该模型的匹配通道（function_configs[].function）。
+fn build_solo_body(body: &Value, channel: &str) -> Value {
+    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    // config_name 取模型名（TRAE 用它定位模型），去掉 __ 后缀。
+    let base = model.split("__").next().unwrap_or(model);
+    let mut messages: Vec<Value> = Vec::new();
+    if let Some(sys) = body.get("system").and_then(|v| v.as_str()) {
+        if !sys.is_empty() {
+            messages.push(json!({ "role": "system", "content": [{ "type": "text", "text": sys }] }));
+        }
+    }
+    if let Some(arr) = body.get("messages").and_then(|v| v.as_array()) {
+        for m in arr {
+            let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+            let content = solo_content(m.get("content"));
+            let mut out = json!({ "role": role, "content": content });
+            // assistant 的 function_call 形态：tool_calls → function_call（OFM transformSOLOMessage）。
+            if role == "assistant" {
+                if let Some(tcs) = m.get("tool_calls").and_then(|v| v.as_array()) {
+                    if let Some(tc) = tcs.first() {
+                        if let Some(f) = tc.get("function") {
+                            out["function_call"] = f.clone();
+                        }
+                    }
+                }
+            }
+            messages.push(out);
+        }
+    }
+    let mut solo = json!({
+        "config_name": base,
+        "model": base,
+        "function": channel,
+        "stream": true,
+        "messages": messages,
+    });
+    if let Some(mt) = body.get("max_tokens") { solo["max_tokens"] = mt.clone(); }
+    if let Some(tp) = body.get("temperature") { solo["temperature"] = tp.clone(); }
+    // tools.parameters 序列化成 JSON 字符串（normalizeTools）。
+    if let Some(tools) = body.get("tools").and_then(|v| v.as_array()) {
+        if !tools.is_empty() {
+            let mut out = Vec::new();
+            for t in tools {
+                let mut t = t.clone();
+                if let Some(params) = t.pointer("/function/parameters") {
+                    if params.is_object() {
+                        t["function"]["parameters"] = Value::String(params.to_string());
+                    }
+                }
+                out.push(t);
+            }
+            solo["tools"] = Value::Array(out);
+        }
+    }
+    solo
+}
+
+/// 把消息 content 转成 SOLO 的 parts 数组：string→[{type:text}]，
+/// 已是数组（多模态）原样透传（image_url 等），null→null。
+fn solo_content(content: Option<&Value>) -> Value {
+    match content {
+        None | Some(Value::Null) => Value::Null,
+        Some(Value::String(s)) => json!([{ "type": "text", "text": s }]),
+        Some(Value::Array(parts)) => {
+            // 保留 text 段并转为 {type,text}，image_url 段透传。
+            let mut out = Vec::new();
+            for p in parts {
+                match p.get("type").and_then(|v| v.as_str()) {
+                    Some("text") => out.push(json!({ "type": "text", "text": p.get("text").and_then(|v| v.as_str()).unwrap_or("") })),
+                    Some("image_url") => out.push(p.clone()),
+                    _ => {}
+                }
+            }
+            Value::Array(out)
+        }
+        Some(other) => other.clone(),
     }
 }
 
-pub fn build_trae_catalog(rows: &[Value]) -> Vec<ModelEntry> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for r in rows {
-        let e = trae_entry_of(r);
-        if e.upstream_id.is_empty() || !seen.insert(e.upstream_id.clone()) {
-            continue;
+/// SOLO 私有事件流文本 → 一条 OpenAI `chat.completion` JSON。
+/// 折叠规则（对齐 OFM consumeSse + solosse.go 注释）：
+/// - event:output → data.{response 正文, reasoning_content 思考, tool_calls}
+/// - event:token_usage → data.{prompt_tokens, completion_tokens, reasoning_tokens}
+/// - event:done → data.finish_reason
+/// - event:error → 抛 Err(code+message)
+fn translate_trae_sse(raw: &str) -> Result<Value, String> {
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+    let mut usage = json!({});
+    let mut finish = "stop".to_string();
+    let mut id = String::new();
+    // SOLO 事件以空行分块；块内 event:/data: 行。
+    for block in raw.split("\n\n") {
+        let mut ev = String::new();
+        let mut data = String::new();
+        for line in block.lines() {
+            let t = line.trim_end_matches('\r');
+            if let Some(rest) = t.strip_prefix("event:") {
+                ev = rest.trim().to_string();
+            } else if let Some(rest) = t.strip_prefix("data:") {
+                data.push_str(rest.trim_start());
+            }
         }
-        out.push(e);
+        if ev.is_empty() { continue; }
+        let parsed: Value = if data.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&data).unwrap_or(Value::Null)
+        };
+        match ev.as_str() {
+            "output" => {
+                if id.is_empty() {
+                    if let Some(sid) = parsed.get("session_id").and_then(|v| v.as_str()) {
+                        id = format!("trae-{}", sid);
+                    }
+                }
+                if let Some(rc) = parsed.get("response").and_then(|v| v.as_str()) { content.push_str(rc); }
+                if let Some(rs) = parsed.get("reasoning_content").and_then(|v| v.as_str()) { reasoning.push_str(rs); }
+                if let Some(tcs) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tcs { tool_calls.push(tc.clone()); }
+                }
+            }
+            "metadata" => {
+                if id.is_empty() {
+                    if let Some(sid) = parsed.get("session_id").and_then(|v| v.as_str()) {
+                        id = format!("trae-{}", sid);
+                    }
+                }
+            }
+            "token_usage" => {
+                usage = json!({
+                    "prompt_tokens": parsed.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "completion_tokens": parsed.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "total_tokens": parsed.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                });
+            }
+            "done" => {
+                if let Some(fr) = parsed.get("finish_reason").and_then(|v| v.as_str()) {
+                    finish = fr.to_string();
+                }
+            }
+            "error" => {
+                let code = parsed.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+                let msg = parsed.get("message").and_then(|v| v.as_str()).unwrap_or("stream error");
+                return Err(format!("trae stream error code={}: {}", code, msg));
+            }
+            _ => {}
+        }
     }
-    out
+    if content.is_empty() && reasoning.is_empty() && tool_calls.is_empty() {
+        return Err("trae: empty model response".into());
+    }
+    let mut message = json!({ "role": "assistant" });
+    if !content.is_empty() { message["content"] = json!(content); }
+    if !reasoning.is_empty() { message["reasoning_content"] = json!(reasoning); }
+    if !tool_calls.is_empty() {
+        let calls: Vec<Value> = tool_calls.iter().map(|tc| {
+            let f = tc.get("function").cloned().unwrap_or(json!({}));
+            // arguments 上游可能给对象，OpenAI 约定给 JSON 字符串。
+            let mut f = f;
+            if let Some(args) = f.get_mut("arguments") {
+                if !args.is_string() && !args.is_null() {
+                    *args = Value::String(args.to_string());
+                }
+            }
+            json!({
+                "id": tc.get("id").and_then(|v| v.as_str()).unwrap_or("call_0"),
+                "type": "function",
+                "function": f,
+            })
+        }).collect();
+        message["tool_calls"] = Value::Array(calls);
+        if finish == "stop" { finish = "tool_calls".to_string(); }
+    }
+    let choice = json!({ "index": 0, "message": message, "finish_reason": finish });
+    Ok(json!({
+        "id": if id.is_empty() { format!("trae-{}", uuid::Uuid::new_v4()) } else { id },
+        "object": "chat.completion",
+        "created": crate::store::now_ms() / 1000,
+        "model": "",
+        "choices": [choice],
+        "usage": usage,
+    }))
+}
+
+/// 截断辅助（探针与错误信息复用）。
+fn short_text(s: &str) -> String {
+    let t: String = s.chars().take(160).collect();
+    t.replace('"', "'").replace('\n', " ")
 }
 
 pub struct TraeClient {
@@ -315,50 +610,106 @@ impl TraeClient {
         Ok(TokenCreds { uid, nickname, extra, ..creds.clone() })
     }
 
-    /// chat：伪装 IDE 身份头。
-    pub async fn chat(&self, creds: &TokenCreds, body: &Value, machine_gen: u64) -> Result<reqwest::Response, String> {
+    /// chat：SOLO 私有协议（2026-10-19 全实测）。
+    /// - 端点 `POST {agentHost}/api/agent/v3/llm_utils_chat`，强制 `stream:true`；
+    ///   旧的 `/mcp/v1/chat` 路径 404，非真实通道（已废弃）。
+    /// - 请求体把 OpenAI 形态转成 SOLO 形态（transformToSOLOBody）：模型名做
+    ///   `config_name`+`model`、带上匹配通道 `function`、字符串 content 拆成
+    ///   `[{type:"text",text}]`、tools.parameters 序列化成 JSON 字符串。
+    /// - 响应是 SOLO 私有事件流（`event:output/token_usage/done/error`），**不是**
+    ///   OpenAI 格式，必须在本地折叠成一条 `chat.completion` JSON 再交给调用方
+    ///   （`Upstream::Json`，server.rs 会按 stream 与否统一渲染）。
+    /// - `event:error` 在流内携带 code=4001（参数非法，常见于通道与模型不匹配）、
+    ///   1005/4008（额度）等——这里映射成 Err，让探针与服务层如实看到失败。
+    pub async fn chat(&self, creds: &TokenCreds, body: &Value, machine_gen: u64) -> Result<Value, String> {
         let uid = &creds.uid;
         let base_machine = creds.extra.get("machineId").and_then(|v| v.as_str()).unwrap_or(uid);
         let device_id = creds.extra.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
-        let url = format!("{}{}", AGENT_HOST, "/mcp/v1/chat");
+        // 通道：优先用条目带来的 function，缺省 solo_work_lite（OFM product.function）。
+        let channel = body.get("__channel").and_then(|v| v.as_str())
+            .filter(|c| !c.is_empty())
+            .unwrap_or(TRAE_FUNCTION_DEFAULT).to_string();
+        let solo = build_solo_body(body, &channel);
+        let url = format!("{}{}", AGENT_HOST, SOLO_CHAT_PATH);
         let mut req = self.http.post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("User-Agent", format!("Trae/{}", IDE_VERSION))
+            .header("Authorization", format!("Cloud-IDE-JWT {}", creds.access_token))
             .header("X-Cloudide-Token", &creds.access_token)
             .header("X-Ide-Token", &creds.access_token)
             .header("X-Uid", uid)
             .header("X-App-Id", APP_ID)
             .header("X-App-Version", "default")
             .header("X-Ide-Version", IDE_VERSION)
+            .header("X-Ide-Version-Code", IDE_VERSION_CODE)
+            .header("X-App-Version-Code", IDE_VERSION_CODE)
             .header("X-Ide-Version-Type", "stable")
             .header("X-Device-Type", "macos")
             .header("X-OS-Version", "14.0")
             .header("X-Device-Brand", "Apple")
+            .header("Request-Traffic-Type", "prod")
             .header("X-Machine-Id", derive_rotating_machine_id(base_machine, machine_gen));
         if !device_id.is_empty() {
             req = req.header("X-Device-Id", device_id);
         }
-        req.json(body).send().await.map_err(|e| format!("trae chat: {}", e))
+        let resp = req.json(&solo).send().await.map_err(|e| format!("trae chat: {}", e))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("trae chat HTTP {}: {}", status.as_u16(), short_text(&text)));
+        }
+        let raw = resp.text().await.map_err(|e| format!("trae chat body: {}", e))?;
+        translate_trae_sse(&raw)
     }
 
-    /// 目录：POST batch_get_detail_param。
+    /// 目录：POST batch_get_detail_param（带全 function 名 + SOLO 头）。
+    /// 空 body 服务端只回 `allow_tenant_user_add_model`、无 function_configs →
+    /// 解析为 0；必须按 OFM fetchModels 的 bodyObj 结构请求（2026-10-19 实测 22 组）。
     pub async fn catalog(&self, creds: &TokenCreds) -> Result<Vec<ModelEntry>, String> {
-        let resp = self.listing.post(format!("{}{}", AGENT_HOST, BATCH_MODELS_PATH))
+        let base_machine = creds.extra.get("machineId").and_then(|v| v.as_str()).unwrap_or(&creds.uid);
+        let device_id = creds.extra.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
+        let body = json!({
+            "functions": TRAE_FUNCTIONS,
+            "agent_type": "",
+            "current_config_info": { "config_name": "", "is_custom_model": false },
+            "mode_type": 0,
+            "access_type": 0,
+            "ab_force_vids": "",
+            "ab_autotest_advanced_mode": 0,
+            "show_custom_model": true
+        });
+        let mut req = self.listing.post(format!("{}{}", AGENT_HOST, BATCH_MODELS_PATH))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header("User-Agent", format!("Trae/{}", IDE_VERSION))
+            .header("Authorization", format!("Cloud-IDE-JWT {}", creds.access_token))
             .header("X-Cloudide-Token", &creds.access_token)
             .header("X-Ide-Token", &creds.access_token)
             .header("X-Uid", &creds.uid)
             .header("X-App-Id", APP_ID)
-            .header("Content-Type", "application/json")
-            .json(&json!({}))
-            .send().await.map_err(|e| format!("trae models: {}", e))?;
+            .header("X-App-Version", "default")
+            .header("X-Ide-Version", IDE_VERSION)
+            .header("X-Ide-Version-Code", IDE_VERSION_CODE)
+            .header("X-App-Version-Code", IDE_VERSION_CODE)
+            .header("X-Ide-Version-Type", "stable")
+            .header("X-Device-Type", "macos")
+            .header("X-OS-Version", "14.0")
+            .header("X-Device-Brand", "Apple")
+            .header("Request-Traffic-Type", "prod")
+            .header("X-Machine-Id", derive_rotating_machine_id(base_machine, 0));
+        if !device_id.is_empty() {
+            req = req.header("X-Device-Id", device_id);
+        }
+        let resp = req.json(&body).send().await.map_err(|e| format!("trae models: {}", e))?;
         let status = resp.status();
         let value: Value = resp.json().await.map_err(|e| format!("trae models body: {}", e))?;
         if !status.is_success() {
             return Err(format!("models HTTP {}", status.as_u16()));
         }
-        let data = value.get("data").unwrap_or(&value);
-        let rows: Vec<Value> = data.as_array().cloned()
-            .or_else(|| data.get("models").and_then(|v| v.as_array()).cloned())
-            .unwrap_or_default();
-        Ok(build_trae_catalog(&rows))
+        let groups = value.get("function_configs").or_else(|| value.get("FunctionConfigs"))
+            .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        Ok(build_trae_catalog(&groups))
     }
 }
 
@@ -398,14 +749,95 @@ mod tests {
     }
 
     #[test]
-    fn catalog_deduped() {
-        let rows = vec![
-            json!({ "id": "deepseek-v4", "name": "DeepSeek V4", "contextLength": 200_000 }),
-            json!({ "id": "deepseek-v4", "name": "dup" }),
-            json!({ "model": "glm-5.2", "displayName": "GLM 5.2" }),
+    fn catalog_deduped_by_channel_priority() {
+        // 真实结构（2026-10-19 实测）：function_configs[].config_info_list[]，
+        // 条目字段是 config_name/display_config.display_name/usage/config_switch。
+        let mk = |name: &str, usage: &str, on: bool| json!({
+            "config_name": name,
+            "usage": usage,
+            "config_switch": on,
+            "display_config": { "display_name": name },
+            "context_window_tokens": { "dev": 128_000, "max": 256_000 },
+            "model_detail_list": [ { "model_name": format!("{name}__dev"), "max_tokens": 8192 } ]
+        });
+        let groups = vec![
+            // chat_v3 优先级低于 solo_agent —— 同 id 应保留 solo_agent 的条目
+            json!({ "function": "chat_v3", "config_info_list": [ mk("deepseek-v4", "chat_completion", true) ] }),
+            json!({ "function": "solo_agent", "config_info_list": [
+                mk("deepseek-v4", "chat_completion", true),
+                mk("glm-5.2", "chat_completion", true),
+                mk("hidden-one", "chat_completion", false),      // 关闭 → 剔除
+                mk("test-entry", "test", true),                  // 非 chat → 剔除
+            ]}),
+            json!({ "function": "unknown_channel", "config_info_list": [ mk("x", "chat_completion", true) ] }),
         ];
-        let cat = build_trae_catalog(&rows);
-        assert_eq!(cat.len(), 2);
-        assert_eq!(cat[0].upstream_id, "deepseek-v4");
+        let cat = build_trae_catalog(&groups);
+        let ids: Vec<&str> = cat.iter().map(|e| e.upstream_id.as_str()).collect();
+        // 保留 deepseek-v4 + glm-5.2；hidden-one（关闭）/test-entry（非 chat）/x（未知通道）剔除
+        assert_eq!(ids.len(), 2, "去重+过滤后应剩 2 个: {ids:?}");
+        assert!(ids.contains(&"deepseek-v4") && ids.contains(&"glm-5.2"));
+        // solo_agent 通道的条目胜出（rank 更小）
+        let d = cat.iter().find(|e| e.upstream_id == "deepseek-v4").unwrap();
+        assert_eq!(d.context, 128_000);
+        assert_eq!(d.max_output, 8192);
+    }
+
+    #[test]
+    fn entry_of_filters_and_maps() {
+        // usage 缺省视为放行（部分通道不带 usage 字段）
+        let e = trae_entry_of(&json!({"config_name": "a", "config_switch": true}));
+        assert!(e.is_some() && e.unwrap().upstream_id == "a");
+        // is_invisible_to_user 剔除
+        assert!(trae_entry_of(&json!({"config_name": "b", "is_invisible_to_user": true})).is_none());
+        // 空 id 剔除
+        assert!(trae_entry_of(&json!({"config_name": ""})).is_none());
+    }
+
+    #[test]
+    fn solo_body_maps_openai_to_wire() {
+        let openai = json!({
+            "model": "deepseek-v4__dev",
+            "messages": [
+                { "role": "system", "content": "You are helpful." },
+                { "role": "user", "content": "hi" }
+            ],
+            "max_tokens": 128
+        });
+        let solo = build_solo_body(&openai, "solo_coder");
+        // config_name 去掉 __ 后缀；model 同值；stream 恒 true。
+        assert_eq!(solo["config_name"], json!("deepseek-v4"));
+        assert_eq!(solo["model"], json!("deepseek-v4"));
+        assert_eq!(solo["stream"], json!(true));
+        assert_eq!(solo["function"], json!("solo_coder"));
+        assert_eq!(solo["max_tokens"], json!(128));
+        // 字符串 content → [{type:"text",text}]
+        let msgs = solo["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[1]["content"][0]["type"], json!("text"));
+        assert_eq!(msgs[1]["content"][0]["text"], json!("hi"));
+    }
+
+    #[test]
+    fn translate_folds_output_events() {
+        let raw = "event:metadata\ndata:{\"session_id\":\"sess-1\"}\n\n\
+                   event:output\ndata:{\"response\":\"OK\",\"reasoning_content\":\"think\"}\n\n\
+                   event:token_usage\ndata:{\"prompt_tokens\":11,\"completion_tokens\":4,\"total_tokens\":15}\n\n\
+                   event:done\ndata:{\"finish_reason\":\"stop\"}\n\n";
+        let v = translate_trae_sse(raw).expect("translate");
+        assert_eq!(v["id"], json!("trae-sess-1"));
+        let msg = &v["choices"][0]["message"];
+        assert_eq!(msg["content"], json!("OK"));
+        assert_eq!(msg["reasoning_content"], json!("think"));
+        assert_eq!(v["choices"][0]["finish_reason"], json!("stop"));
+        assert_eq!(v["usage"]["prompt_tokens"], json!(11));
+    }
+
+    #[test]
+    fn translate_surfaces_stream_error() {
+        // 通道与模型不匹配 → 流内 code=4001，必须映射成 Err（探针如实看到失败）。
+        let raw = "event:error\ndata:{\"code\":4001,\"message\":\"param is invalid\"}\n\n\
+                   event:done\ndata:{\"finish_reason\":\"stop\"}\n\n";
+        let e = translate_trae_sse(raw).expect_err("must error");
+        assert!(e.contains("4001"), "{e}");
     }
 }

@@ -297,6 +297,11 @@ pub struct ModelEntry {
     pub multiplier: Option<f64>,
     #[serde(default)]
     pub billing_status: Option<String>,
+    /// 渠道侧的“通道/function”归属（TRAE batch_get_detail_param 的
+    /// function_configs[].function）。chat 时必须带上匹配的通道名，
+    /// 否则 TRAE 在 SSE 流内回 event:error code=4001。
+    #[serde(default)]
+    pub channel: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -353,7 +358,7 @@ pub struct StoredVerdict {
     pub ok: bool,
     pub note: String,
     pub at_ms: i64,
-    /// "available" (6h) | "timeout" (10min) | "unavailable" (1h)
+    /// "available" (6h) | "timeout" (10min) | "rate_limited" (2min) | "unavailable" (1h)
     pub category: String,
 }
 
@@ -362,6 +367,7 @@ impl StoredVerdict {
         let ttl_ms = match self.category.as_str() {
             "available" => 6 * 3600 * 1000,
             "timeout" => 10 * 60 * 1000,
+            "rate_limited" => 2 * 60 * 1000,
             _ => 3600 * 1000,
         };
         now_ms() - self.at_ms < ttl_ms
@@ -373,9 +379,10 @@ impl ModelCache {
         self.probes.get(&format!("{}/{}", source, upstream_id))
     }
     /// A fresh FAILING verdict hides the model; anything else publishes it.
+    /// 限流判定（rate_limited）是账号级瞬时状态，不视为模型故障，不隐藏。
     pub fn publishable(&self, source: &str, upstream_id: &str) -> bool {
         match self.verdict(source, upstream_id) {
-            Some(v) => !(v.fresh() && !v.ok),
+            Some(v) => !(v.fresh() && !v.ok && v.category != "rate_limited"),
             None => true,
         }
     }

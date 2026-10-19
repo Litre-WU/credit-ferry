@@ -113,6 +113,7 @@ pub fn fallback_models(source: &str) -> Vec<ModelEntry> {
         max_output: 32_768,
         multiplier: Some(*price),
         billing_status: if *price == 0.0 { Some("免费".to_string()) } else { None },
+        channel: None,
     }).collect()
 }
 

@@ -785,6 +785,7 @@ mod tests {
             max_output: 8192,
             multiplier: Some(1.0),
             billing_status: None,
+        channel: None,
         }
     }
 

@@ -142,7 +142,7 @@ pub async fn auto_probe_if_needed(state: &Arc<AppState>, source: &str) {
     if !crate::probe::needs_probe(state, source).await {
         return;
     }
-    let verdicts = crate::probe::probe_source_bounded(state, source).await;
+    let verdicts = crate::probe::probe_pending_bounded(state, source).await;
     crate::probe::save_verdicts(state, &verdicts, source).await;
 }
 
@@ -1280,12 +1280,33 @@ fn put_generic_creds(store: &mut crate::store::Store, source: &str, creds: crate
 
 /// Pull the model roster for one Bearer-token channel.
 async fn generic_refresh_inner(state: &Arc<AppState>, source: &str) -> Result<Value, String> {
-    let creds = {
+    let mut creds = {
         let store = state.store.lock().await;
         generic_creds(&store, source).clone()
     };
     if !creds.ready() {
         return Err(format!("{} 未登录", source));
+    }
+    // catalog 走的是同一张 access token —— token 临近过期时先按 chat 路径
+    // 同款逻辑续期（持全局 refresh_gate，RT 单次消费），否则过期后目录直接
+    // 401（minimax 实测）。续期失败不阻断：可能只是时钟抖动，继续试 catalog。
+    if creds.expired() || creds.expires_at - crate::store::now_ms() < 5 * 60 * 1000 {
+        let _gate = state.refresh_gate.lock().await;
+        let refreshed = match source {
+            "lobsterai" => state.lobsterai.refresh(&mut creds).await,
+            "cline" => state.cline.refresh(&mut creds).await,
+            "trae" => Err("TRAE 暂未支持自动续期，请重新登录".to_string()),
+            _ => state.minimax.refresh(&mut creds).await,
+        };
+        match refreshed {
+            Ok(()) => {
+                let mut store = state.store.lock().await;
+                put_generic_creds(&mut store, source, creds.clone());
+                store.save_credentials();
+            }
+            Err(e) if e.starts_with("REFRESH_TERMINAL") => return Err(format!("{} 会话已失效，请重新登录", source)),
+            Err(_) => {}
+        }
     }
     let models = match source {
         "lobsterai" => state.lobsterai.catalog(&creds).await,

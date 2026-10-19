@@ -138,6 +138,14 @@ pub async fn run_round(state: &Arc<AppState>) -> (i64, Value) {
     tick_loomy(state).await;
     next = next.min(tick_raccoon(state).await);
     next = next.min(tick_maodao(state).await);
+    // 模型判定自愈：过期的失败判定重探一次。上游恢复的模型会自动重新
+    // 上架，不依赖用户手动刷新目录；只重探失败项，成功项不烧积分。
+    for src in [
+        "loomy", "raccoon", "opencode", "maodao", "kilo", "zen",
+        "buddy", "workbuddy", "lobsterai", "trae", "minimax", "cline",
+    ] {
+        crate::probe::reprobe_stale_failures(state, src).await;
+    }
     let snapshot = {
         let mut store = state.store.lock().await;
         store.credentials.keepalive.last_run_ms = now_ms();

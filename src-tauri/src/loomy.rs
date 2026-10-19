@@ -114,6 +114,7 @@ impl LoomyClient {
                     max_output: 0,
                     multiplier: m.get("multiplier").and_then(|v| v.as_f64()),
                     billing_status: None,
+        channel: None,
                 });
             }
         }

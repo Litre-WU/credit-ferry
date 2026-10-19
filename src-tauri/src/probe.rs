@@ -18,10 +18,28 @@ use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 
 use crate::server::AppState;
-use crate::store::{now_ms, StoredVerdict};
+use crate::store::{now_ms, ModelCache, ModelEntry, StoredVerdict};
 
 const PROBE_TIMEOUT_MS: u64 = 60_000;
 const CONCURRENCY: usize = 3;
+
+/// 渠道 → 模型目录。probe 与自动体检共用同一映射，避免两处漏渠道。
+fn list_for<'s>(cache: &'s ModelCache, source: &str) -> &'s Vec<ModelEntry> {
+    match source {
+        "raccoon" => &cache.raccoon,
+        "opencode" => &cache.opencode,
+        "maodao" => &cache.maodao,
+        "kilo" => &cache.kilo,
+        "zen" => &cache.zen,
+        "buddy" => &cache.buddy,
+        "workbuddy" => &cache.workbuddy,
+        "lobsterai" => &cache.lobsterai,
+        "trae" => &cache.trae,
+        "minimax" => &cache.minimax,
+        "cline" => &cache.cline,
+        _ => &cache.loomy,
+    }
+}
 
 /// One probe request body: the cheapest possible chat.
 /// OpenCode and Maodao need a bigger cap — their models are reasoning models
@@ -44,22 +62,21 @@ pub async fn probe_source(state: &Arc<AppState>, source: &str) -> Vec<(String, S
     let source = source.to_string();
     let entries: Vec<String> = {
         let store = state.store.lock().await;
-        let list = match source.as_str() {
-            "raccoon" => &store.models.raccoon,
-            "opencode" => &store.models.opencode,
-            "maodao" => &store.models.maodao,
-            "kilo" => &store.models.kilo,
-            "zen" => &store.models.zen,
-            "buddy" => &store.models.buddy,
-            "workbuddy" => &store.models.workbuddy,
-            "lobsterai" => &store.models.lobsterai,
-            "trae" => &store.models.trae,
-            "minimax" => &store.models.minimax,
-            "cline" => &store.models.cline,
-            _ => &store.models.loomy,
-        };
-        list.iter().map(|e| e.upstream_id.clone()).collect()
+        list_for(&store.models, &source)
+            .iter()
+            .map(|e| e.upstream_id.clone())
+            .collect()
     };
+    probe_ids(state, &source, entries).await
+}
+
+/// Verify a given set of upstream ids of one source (shared by the full
+/// probe and the stale-recheck path).
+async fn probe_ids(
+    state: &Arc<AppState>,
+    source: &str,
+    entries: Vec<String>,
+) -> Vec<(String, StoredVerdict)> {
     // Maodao counts concurrent sessions per account, so probing it at the
     // default width would trip its own limit.
     let width = if source == "maodao" {
@@ -72,10 +89,19 @@ pub async fn probe_source(state: &Arc<AppState>, source: &str) -> Vec<(String, S
     for upstream_id in entries {
         let state = Arc::clone(state);
         let sem = Arc::clone(&sem);
-        let source = source.clone();
+        let source = source.to_string();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
-            let verdict = probe_one(&state, &source, &upstream_id).await;
+            let mut verdict = probe_one(&state, &source, &upstream_id).await;
+            if !verdict.ok && verdict.category == "rate_limited" {
+                // 上游瞬时限流：退避后重试一次；再次被限流则保留
+                // rate_limited 判定（不会把可用模型下架）。
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let retry = probe_one(&state, &source, &upstream_id).await;
+                if retry.ok || retry.category != "rate_limited" {
+                    verdict = retry;
+                }
+            }
             (upstream_id, verdict)
         }));
     }
@@ -300,7 +326,47 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 Err(e) => Err(e),
             }
         }
-        "lobsterai" | "trae" | "minimax" | "cline" => {
+        "trae" => {
+            // TRAE SOLO: chat() 内部折叠私有事件流，Ok(value) 即表示拿到了
+            // 真实正文/工具调用（event:error 已映射为 Err）。
+            let mut creds = {
+                let store = state.store.lock().await;
+                store.credentials.trae.clone()
+            };
+            if !creds.ready() {
+                return StoredVerdict {
+                    ok: false,
+                    note: "未登录".into(),
+                    at_ms: now_ms(),
+                    category: "unavailable".into(),
+                };
+            }
+            if creds.expired() || creds.expires_at - now_ms() < 5 * 60 * 1000 {
+                return StoredVerdict {
+                    ok: false,
+                    note: "会话已过期，请重新登录".into(),
+                    at_ms: now_ms(),
+                    category: "unavailable".into(),
+                };
+            }
+            // 通道名必须与目录 function 匹配，否则上游流内回 code=4001。
+            let channel = {
+                let store = state.store.lock().await;
+                store.models.trae.iter()
+                    .find(|e| e.upstream_id == upstream_id)
+                    .and_then(|e| e.channel.clone())
+            };
+            let mut body = body;
+            body["stream"] = json!(true);
+            if let Some(ch) = channel {
+                body["__channel"] = json!(ch);
+            }
+            match state.trae.chat(&creds, &body, 0).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+        "lobsterai" | "minimax" | "cline" => {
             // Native Bearer-token channels: refresh single-use RT under the
             // global gate when near expiry, then one streamed probe request.
             let source = source.to_string();
@@ -308,7 +374,6 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 let store = state.store.lock().await;
                 match source.as_str() {
                     "lobsterai" => store.credentials.lobsterai.clone(),
-                    "trae" => store.credentials.trae.clone(),
                     "cline" => store.credentials.cline.clone(),
                     _ => store.credentials.minimax.clone(),
                 }
@@ -325,7 +390,6 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 let _gate = state.refresh_gate.lock().await;
                 let refreshed = match source.as_str() {
                     "lobsterai" => state.lobsterai.refresh(&mut creds).await,
-                    "trae" => Err("TRAE 暂未支持自动续期，请重新登录".to_string()),
                     "cline" => state.cline.refresh(&mut creds).await,
                     _ => state.minimax.refresh(&mut creds).await,
                 };
@@ -340,7 +404,6 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
                 let mut store = state.store.lock().await;
                 match source.as_str() {
                     "lobsterai" => store.credentials.lobsterai = creds.clone(),
-                    "trae" => store.credentials.trae = creds.clone(),
                     "cline" => store.credentials.cline = creds.clone(),
                     _ => store.credentials.minimax = creds.clone(),
                 }
@@ -350,7 +413,6 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
             body["stream"] = json!(true);
             let resp = match source.as_str() {
                 "lobsterai" => state.lobsterai.chat(&creds, &body).await,
-                "trae" => state.trae.chat(&creds, &body, 0).await,
                 "cline" => state.cline.chat(&creds, &body).await,
                 _ => state.minimax.chat(&creds, &body).await,
             };
@@ -403,6 +465,8 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
         Err(message) => {
             let category = if message.contains("timed out") || message.contains("timeout") {
                 "timeout"
+            } else if is_rate_limited(&message) {
+                "rate_limited"
             } else {
                 "unavailable"
             };
@@ -414,6 +478,12 @@ async fn probe_one(state: &Arc<AppState>, source: &str, upstream_id: &str) -> St
             }
         }
     }
+}
+
+/// 上游瞬时限流（HTTP 429 / 14003 too many requests）：模型本身可用，
+/// 批量探针踩到账号级 QPS 时不应把模型下架。
+fn is_rate_limited(msg: &str) -> bool {
+    msg.contains("HTTP 429") || msg.contains("too many requests") || msg.contains("14003")
 }
 
 /// Keep an upstream error note short and readable.
@@ -441,6 +511,19 @@ pub async fn probe_source_bounded(state: &Arc<AppState>, source: &str) -> Vec<(S
     }
 }
 
+/// `probe_pending` with the same hard deadline — for the auto-probe path.
+pub async fn probe_pending_bounded(state: &Arc<AppState>, source: &str) -> Vec<(String, StoredVerdict)> {
+    match tokio::time::timeout(
+        Duration::from_millis(PROBE_TIMEOUT_MS * 12),
+        probe_pending(state, source),
+    )
+    .await
+    {
+        Ok(verdicts) => verdicts,
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Store verdicts back into the model cache.
 pub async fn save_verdicts(state: &Arc<AppState>, verdicts: &[(String, StoredVerdict)], source: &str) {
     let mut store = state.store.lock().await;
@@ -453,17 +536,52 @@ pub async fn save_verdicts(state: &Arc<AppState>, verdicts: &[(String, StoredVer
     store.save_models();
 }
 
-/// Does any model of this source lack a verdict? (Drives the auto-probe.)
+/// Models of this source that still deserve a probe: no verdict at all, or
+/// a failed verdict whose TTL lapsed. Successful verdicts that merely went
+/// stale stay published without re-probing — that would burn Loomy/Raccoon
+/// credits for no user-visible gain.
+fn select_pending(cache: &ModelCache, source: &str, stale_failures_only: bool) -> Vec<String> {
+    list_for(cache, source)
+        .iter()
+        .filter(|e| match cache.verdict(source, &e.upstream_id) {
+            None => !stale_failures_only,
+            Some(v) => !v.ok && !v.fresh(),
+        })
+        .map(|e| e.upstream_id.clone())
+        .collect()
+}
+
+/// Does any model of this source lack a verdict (or hold a lapsed failing
+/// one)? Drives the auto-probe after a catalogue refresh.
 pub async fn needs_probe(state: &Arc<AppState>, source: &str) -> bool {
     let store = state.store.lock().await;
-    let list = match source {
-        "raccoon" => &store.models.raccoon,
-        "opencode" => &store.models.opencode,
-        "maodao" => &store.models.maodao,
-        "kilo" => &store.models.kilo,
-        "zen" => &store.models.zen,
-        _ => &store.models.loomy,
+    !select_pending(&store.models, source, false).is_empty()
+}
+
+/// Probe only the models that still deserve it (missing verdict or lapsed
+/// failure). Returns empty when everything is fresh.
+pub async fn probe_pending(state: &Arc<AppState>, source: &str) -> Vec<(String, StoredVerdict)> {
+    let ids = {
+        let store = state.store.lock().await;
+        select_pending(&store.models, source, false)
     };
-    list.iter()
-        .any(|e| store.models.verdict(source, &e.upstream_id).is_none())
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    probe_ids(state, source, ids).await
+}
+
+/// Periodic recheck for the keepalive loop: only lapsed FAILING verdicts —
+/// so a transiently broken model gets republished once upstream recovers
+/// without a manual refresh.
+pub async fn reprobe_stale_failures(state: &Arc<AppState>, source: &str) {
+    let ids = {
+        let store = state.store.lock().await;
+        select_pending(&store.models, source, true)
+    };
+    if ids.is_empty() {
+        return;
+    }
+    let verdicts = probe_ids(state, source, ids).await;
+    save_verdicts(state, &verdicts, source).await;
 }

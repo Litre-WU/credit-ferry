@@ -247,6 +247,7 @@ impl RaccoonClient {
                     max_output,
                     multiplier: if promoted { effective } else { base_multiplier },
                     billing_status: status,
+        channel: None,
                 });
             }
             if !out.is_empty() {

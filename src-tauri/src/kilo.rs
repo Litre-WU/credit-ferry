@@ -97,6 +97,7 @@ pub fn kilo_entry_of(row: &Value) -> ModelEntry {
         max_output: output,
         multiplier: Some(0.0),
         billing_status: Some("free-pool（提示词可能被上游记录）".to_string()),
+        channel: None,
     }
 }
 

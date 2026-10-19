@@ -14,6 +14,13 @@
 //! - chat：POST {endpoint}/v2/chat/completions，**强制流式**（非流式 400
 //!   「Non-stream chat request is currently not supported」，实测），归因头
 //!   X-Domain / X-Product-Code / X-Agent-Purpose / X-IDE-* / X-Product / UA。
+//! - **workbuddy 会话硬校验（2026-10-19 逐头二分实测）**：chat 必须带
+//!   X-Conversation-ID / X-Conversation-Request-ID / X-Conversation-Message-ID
+//!   三个头（缺任一个 → 400 code=11128 request illegal，伪装成安全拦截），
+//!   且 messages 首条必须是 system（否则 11128 first message is not system
+//!   prompt）。三头用每请求新 v4 UUID 即可，网关不校验值来源；X-User-Id、
+//!   trace 头、UA、X-Product 等其余归因头均可缺。CodeBuddy 网关无此校验
+//!   （现状可证），故用 Product.needs_conversation 区分。
 //! - 目录：GET {endpoint}/console/enterprises/personal/models（scoped 优先）
 //!   + GET {endpoint}/v3/config（parseModelsFromConfig 合并 data.models/agents/promotions）。
 //!
@@ -38,6 +45,8 @@ pub struct Product {
     pub platform: &'static str,
     pub user_agent: &'static str,
     pub client_version: &'static str,
+    /// WorkBuddy 网关强校验三会话头 + system 首条（缺 → 11128）；CodeBuddy 不校验。
+    pub needs_conversation: bool,
 }
 
 pub const CODEBUDDY: Product = Product {
@@ -49,6 +58,7 @@ pub const CODEBUDDY: Product = Product {
     platform: "ide",
     user_agent: "CodeBuddyIDE/1.106.1",
     client_version: "1.106.1",
+    needs_conversation: false,
 };
 
 pub const WORKBUDDY: Product = Product {
@@ -60,6 +70,7 @@ pub const WORKBUDDY: Product = Product {
     platform: "ide",
     user_agent: "WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2",
     client_version: "5.5.2",
+    needs_conversation: true,
 };
 
 // 路径常量（business.mjs 33742-33766）。
@@ -470,6 +481,30 @@ impl BuddyClient {
         for (k, v) in chat_headers(p, creds) {
             req = req.header(k, v);
         }
+        if p.needs_conversation {
+            // WorkBuddy 网关强校验（2026-10-19 二分实测）：三会话头缺任一 →
+            // 11128 request illegal；首条不是 system → 11128 first message is
+            // not system prompt。三头值只要形态是 UUID 即可，每请求新建。
+            let conv = uuid::Uuid::new_v4().to_string();
+            let creq = uuid::Uuid::new_v4().to_string();
+            let cmsg = uuid::Uuid::new_v4().to_string();
+            req = req
+                .header("X-Conversation-ID", conv)
+                .header("X-Conversation-Request-ID", creq)
+                .header("X-Conversation-Message-ID", cmsg);
+            // 首条补空 system（实测空 content 的 system 也放行，最小侵入用户提示）。
+            if let Some(arr) = body.get_mut("messages").and_then(|v| v.as_array_mut()) {
+                let first_is_system = arr
+                    .first()
+                    .and_then(|m| m.get("role"))
+                    .and_then(|r| r.as_str())
+                    .map(|r| r == "system")
+                    .unwrap_or(false);
+                if !first_is_system {
+                    arr.insert(0, serde_json::json!({ "role": "system", "content": "" }));
+                }
+            }
+        }
         req.json(&body)
             .send()
             .await
@@ -529,6 +564,7 @@ fn buddy_entry_of(source: &str, row: &Value) -> ModelEntry {
         max_output: max_out,
         multiplier: None,
         billing_status: None,
+        channel: None,
     }
 }
 
