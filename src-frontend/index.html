@@ -88,6 +88,21 @@
 
 <div class="wrap">
 
+  <div class="section-title">接入密钥（API Key）<span class="muted" style="font-weight:400">— 转发口 <span class="endpoint" id="endpoint-view2">http://127.0.0.1:6666/v1</span> 的 Bearer 鉴权；可增删多把，导出配置始终用主密钥</span></div>
+  <div class="card">
+    <div id="newkey-banner" class="muted" style="display:none;margin-bottom:10px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e"></div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="newkey-label" placeholder="为密钥起个名字（如：我的笔记本 / Cursor）" style="max-width:280px">
+      <button class="primary" id="btn-add-key">新增密钥</button>
+      <span class="muted" style="margin-left:auto;font-size:12px">新密钥的完整明文只在创建后这一次显示，请立即复制保存。</span>
+    </div>
+    <table id="keys-table">
+      <thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead>
+      <tbody><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+    </table>
+    <div class="muted" style="margin-top:8px">主密钥（导出写入各客户端的那把）不可吊销；额外密钥吊销后立即失效，正在用它的客户端会收到 401。所有密钥共享同一模型池与账本。</div>
+  </div>
+
   <div class="section-title">模型列表 <span class="muted" style="font-weight:400">— 客户端经 <span class="endpoint" id="endpoint-view">http://127.0.0.1:6666/v1</span> 调用；仅「✓ 可调用」的模型会提供给客户端</span></div>
   <div class="card">
     <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
@@ -373,21 +388,6 @@
     </div>
     <div id="ka-status" class="muted" style="margin-top:8px"></div>
     <div id="ka-blocks" class="muted" style="margin-top:6px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#b91c1c;display:none"></div>
-  </div>
-
-  <div class="section-title">接入密钥（API Key）<span class="muted" style="font-weight:400">— 转发口 <span class="endpoint" id="endpoint-view2">http://127.0.0.1:6666/v1</span> 的 Bearer 鉴权；可增删多把，导出配置始终用主密钥</span></div>
-  <div class="card">
-    <div id="newkey-banner" class="muted" style="display:none;margin-bottom:10px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e"></div>
-    <div class="row" style="margin-bottom:10px">
-      <input type="text" id="newkey-label" placeholder="为密钥起个名字（如：我的笔记本 / Cursor）" style="max-width:280px">
-      <button class="primary" id="btn-add-key">新增密钥</button>
-      <span class="muted" style="margin-left:auto;font-size:12px">新密钥的完整明文只在创建后这一次显示，请立即复制保存。</span>
-    </div>
-    <table id="keys-table">
-      <thead><tr><th>名称</th><th>密钥</th><th>创建时间</th><th>操作</th></tr></thead>
-      <tbody><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
-    </table>
-    <div class="muted" style="margin-top:8px">主密钥（导出写入各客户端的那把）不可吊销；额外密钥吊销后立即失效，正在用它的客户端会收到 401。所有密钥共享同一模型池与账本。</div>
   </div>
 
   <div class="section-title">导出到客户端</div>
