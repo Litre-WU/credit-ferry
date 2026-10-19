@@ -435,6 +435,54 @@ pub struct Store {
     pub credentials: Credentials,
     pub models: ModelCache,
     pub ledger: Ledger,
+    /// 多把接入密钥（2026-10-19 新增）：`api-keys.json`。主密钥（primary）
+    /// 始终等于 `api-key` 文件内容，导出配置只写主密钥；额外密钥同样能过
+    /// 转发口鉴权，可随时吊销。
+    pub api_keys: ApiKeyList,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyInfo {
+    pub id: String,
+    pub label: String,
+    /// 明文密钥。本机盘上已有 credentials.json 明文凭据的同等保护口径。
+    pub key: String,
+    pub created_at_ms: i64,
+    /// 主密钥不可吊销；首次打开时从 `api-key` 文件同步进来。
+    pub primary: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyList {
+    #[serde(default)]
+    pub keys: Vec<ApiKeyInfo>,
+}
+
+impl ApiKeyList {
+    /// 保证主密钥在列表首位且与 `api-key` 文件一致；缺额外结构时补空表。
+    pub fn ensure_primary(&mut self, primary: &str) {
+        if self.keys.iter().any(|k| k.primary) {
+            for k in self.keys.iter_mut() {
+                if k.primary {
+                    k.key = primary.to_string();
+                }
+            }
+        } else {
+            self.keys.insert(0, ApiKeyInfo {
+                id: "primary".into(),
+                label: "主密钥".into(),
+                key: primary.to_string(),
+                created_at_ms: crate::store::now_ms(),
+                primary: true,
+            });
+        }
+    }
+
+    pub fn authorize(&self, candidate: &str) -> bool {
+        !candidate.is_empty() && self.keys.iter().any(|k| k.key == candidate)
+    }
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, default: T) -> T {
@@ -457,12 +505,14 @@ fn write_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
 impl Store {
     pub fn open(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&dir);
+        let api_keys: ApiKeyList = read_json(&dir.join("api-keys.json"), ApiKeyList::default());
         Self {
             settings: read_json(&dir.join("settings.json"), Settings::default()),
             credentials: read_json(&dir.join("credentials.json"), Credentials::default()),
             models: read_json(&dir.join("models-cache.json"), ModelCache::default()),
             ledger: read_json(&dir.join("ledger.json"), Ledger::default()),
             dir,
+            api_keys,
         }
     }
 
@@ -478,6 +528,37 @@ impl Store {
         let key = new_hex(32);
         let _ = fs::write(self.api_key_path(), &key);
         key
+    }
+
+    pub fn save_api_keys(&self) {
+        let _ = write_json(&self.dir.join("api-keys.json"), &self.api_keys);
+    }
+
+    /// 新增一把额外密钥，返回新条目。
+    pub fn add_api_key(&mut self, label: &str) -> ApiKeyInfo {
+        let info = ApiKeyInfo {
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            label: if label.trim().is_empty() { "未命名".into() } else { label.trim().chars().take(40).collect() },
+            key: new_hex(32),
+            created_at_ms: now_ms(),
+            primary: false,
+        };
+        self.api_keys.keys.push(info.clone());
+        self.save_api_keys();
+        info
+    }
+
+    /// 吊销一把非主密钥。主密钥返回 Err。
+    pub fn revoke_api_key(&mut self, id: &str) -> Result<(), String> {
+        let Some(pos) = self.api_keys.keys.iter().position(|k| k.id == id) else {
+            return Err("密钥不存在".into());
+        };
+        if self.api_keys.keys[pos].primary {
+            return Err("主密钥不可吊销（导出配置依赖它）".into());
+        }
+        self.api_keys.keys.remove(pos);
+        self.save_api_keys();
+        Ok(())
     }
 
     pub fn save_settings(&self) { let _ = write_json(&self.dir.join("settings.json"), &self.settings); }
@@ -549,4 +630,56 @@ pub fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_keys_ensure_primary_and_lifecycle() {
+        let tmp = std::env::temp_dir().join(format!("cf-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut store = Store::open(tmp.clone());
+        let primary = store.load_or_create_api_key();
+        store.api_keys.ensure_primary(&primary);
+        // 主密钥入列且唯一
+        assert_eq!(store.api_keys.keys.len(), 1);
+        assert!(store.api_keys.keys[0].primary);
+        assert_eq!(store.api_keys.keys[0].key, primary);
+        assert!(store.api_keys.authorize(&primary));
+        assert!(!store.api_keys.authorize(""));
+        assert!(!store.api_keys.authorize("nope"));
+
+        // 新增额外密钥
+        let extra = store.add_api_key("我的笔记本");
+        assert_eq!(extra.key.len(), 64);
+        assert!(!extra.primary);
+        assert!(store.api_keys.authorize(&extra.key));
+        // 再开一个 store 读回持久化结果
+        let reloaded = Store::open(tmp.clone());
+        assert_eq!(reloaded.api_keys.keys.len(), 2);
+        assert!(reloaded.api_keys.authorize(&extra.key));
+
+        // 主密钥不可吊销；额外密钥可吊销
+        let pid = store.api_keys.keys[0].id.clone();
+        assert!(store.revoke_api_key(&pid).is_err());
+        assert!(store.revoke_api_key(&extra.id).is_ok());
+        assert!(!store.api_keys.authorize(&extra.key));
+        assert_eq!(Store::open(tmp.clone()).api_keys.keys.len(), 1);
+
+        // ensure_primary 幂等：主密钥内容变化会同步而不是追加第二条
+        store.api_keys.ensure_primary(&primary);
+        assert_eq!(store.api_keys.keys.iter().filter(|k| k.primary).count(), 1);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn mask_key_keeps_tail() {
+        let masked = crate::server::mask_key("0123456789abcdef");
+        assert!(masked.ends_with("cdef"));
+        assert!(masked.starts_with('•'));
+        assert_eq!(crate::server::mask_key("short"), "••••");
+    }
 }

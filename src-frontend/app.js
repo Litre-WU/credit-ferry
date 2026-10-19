@@ -148,6 +148,60 @@
     $('btn-ledger-next').disabled = ledgerState.page >= pages;
   }
 
+  // 已主动揭示 / 新建待复制的密钥明文：id -> key。
+  var revealedKeys = {};
+
+  function renderKeys(keys) {
+    var tbody = document.querySelector('#keys-table tbody');
+    if (!tbody) return;
+    if (!keys.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">暂无密钥</td></tr>';
+      return;
+    }
+    tbody.innerHTML = keys.map(function (k) {
+      // 主密钥 snapshot 直接给全文；额外密钥默认掩码，reveal 后存 revealedKeys。
+      var plaintext = k.revealed ? k.key : revealedKeys[k.id];
+      var keyCell = plaintext ? '<code>' + esc(plaintext) + '</code>' : '<span class="muted">' + esc(k.key) + '</span>';
+      var name = esc(k.label || '未命名') + (k.primary ? ' <span class="badge ok">主密钥</span>' : '');
+      var ops = '<button class="small" data-key-copy="' + esc(k.id) + '"' + (plaintext ? '' : ' disabled title="点「查看」后可复制"') + '>复制</button>';
+      if (!plaintext) ops += ' <button class="small" data-key-reveal="' + esc(k.id) + '">查看</button>';
+      if (!k.primary) ops += ' <button class="small danger" data-key-revoke="' + esc(k.id) + '">吊销</button>';
+      return '<tr><td>' + name + '</td>' +
+        '<td><span class="endpoint" style="font-size:12px">' + keyCell + '</span></td>' +
+        '<td class="muted" style="font-size:12px">' + fmtTime(k.createdAtMs) + '</td>' +
+        '<td>' + ops + '</td></tr>';
+    }).join('');
+    // 委托绑定
+    [].slice.call(tbody.querySelectorAll('[data-key-copy]')).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-key-copy');
+        var k = keys.find(function (x) { return x.id === id; });
+        if (!k) return;
+        copyText(k.revealed ? k.key : revealedKeys[id], '密钥已复制');
+      });
+    });
+    [].slice.call(tbody.querySelectorAll('[data-key-reveal]')).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-key-reveal');
+        invoke('reveal_api_key', { id: id }).then(function (r) {
+          revealedKeys[id] = r.key;
+          renderKeys(keys);
+        }).catch(function (e) { toast('查看失败：' + e); });
+      });
+    });
+    [].slice.call(tbody.querySelectorAll('[data-key-revoke]')).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-key-revoke');
+        if (!confirm('吊销后这把密钥立即失效，使用该密钥的客户端会收到 401。确认吊销？')) return;
+        invoke('revoke_api_key', { id: id }).then(function () {
+          delete revealedKeys[id];
+          toast('密钥已吊销');
+          refresh();
+        }).catch(function (e) { toast('吊销失败：' + e); });
+      });
+    });
+  }
+
   // ------------------------------------------------------------- rendering
 
   function probeStat(models) {
@@ -158,7 +212,9 @@
 
   function render(snap) {
     $('endpoint-view').textContent = snap.endpoint;
+    if ($('endpoint-view2')) $('endpoint-view2').textContent = snap.endpoint;
     $('api-key-view').textContent = '••••••••' ;
+    renderKeys(snap.apiKeys || []);
     // 统一验证进行中：按钮禁用 + 进度文案（snapshot 每 3 秒轮询带回）。
     var vbtn = $('btn-verify-all'), vstat = $('verify-all-status');
     if (snap.verifyAllRunning) {
@@ -879,6 +935,39 @@
   $('btn-copy-key').addEventListener('click', function () {
     invoke('get_api_key').then(function (k) { copyText(k, '入口密钥已复制'); });
   });
+
+  // ---- 接入密钥管理 ----
+  function showNewKeyBanner(r) {
+    var b = $('newkey-banner');
+    if (!b) return;
+    b.style.display = 'block';
+    b.innerHTML = '<div>已生成「<b>' + esc(r.label) + '</b>」，密钥：<code style="user-select:all">' + esc(r.key) + '</code></div>' +
+      '<div style="margin-top:6px"><button class="small" id="bn-copy">复制</button> ' +
+      '<button class="small" id="bn-close">我已保存，关闭</button> ' +
+      '<span class="muted">离开本页后表格仅显示掩码，可随时点「查看」取回。</span></div>';
+    var c = document.getElementById('bn-copy');
+    if (c) c.addEventListener('click', function () { copyText(r.key, '密钥已复制'); });
+    var x = document.getElementById('bn-close');
+    if (x) x.addEventListener('click', function () { b.style.display = 'none'; b.innerHTML = ''; });
+  }
+  if ($('btn-add-key')) {
+    $('btn-add-key').addEventListener('click', function () {
+      var btn = $('btn-add-key');
+      var label = ($('newkey-label').value || '').trim();
+      btn.disabled = true;
+      invoke('add_api_key', { label: label }).then(function (r) {
+        btn.disabled = false;
+        revealedKeys[r.id] = r.key;
+        $('newkey-label').value = '';
+        showNewKeyBanner(r);
+        toast('已新增密钥');
+        refresh();
+      }).catch(function (e) {
+        btn.disabled = false;
+        toast('新增失败：' + e);
+      });
+    });
+  }
 
   // ------------------------------------------------- DSH connector platforms
 

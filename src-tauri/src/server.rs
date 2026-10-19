@@ -80,6 +80,9 @@ pub struct AppState {
     /// In-flight browser login for the Maodao upstream.
     pub maodao_login: Mutex<Option<MaodaoLogin>>,
     pub key: String,
+    /// 额外接入密钥的明文副本（api-keys.json 非 primary 条目）；与主密钥
+    /// 同样可过转发口鉴权。增删经 commands 层同步，guard 只读。
+    pub extra_keys: std::sync::Mutex<Vec<String>>,
     pub sem: Arc<Semaphore>,
     /// Maodao counts concurrent sessions per account and rejects the fourth
     /// (`并发会话数已达上限(3个)`), so its calls are queued separately from the
@@ -136,10 +139,35 @@ fn authorized(headers: &HeaderMap, key: &str) -> bool {
     ct_eq(actual.as_bytes(), expected.as_bytes())
 }
 
+/// 额外密钥在面板里只回显掩码（保留尾 4 位可辨认）；完整明文仅在「新增」
+/// 命令的返回里出现一次，由用户当场复制。
+pub fn mask_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 8 {
+        return "••••".to_string();
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("••••••••{}", tail)
+}
+
 /// Shared request guard: bearer key first, then the browser-origin fence.
 /// Returns `Some(error response)` when the request must be refused.
-fn guard(headers: &HeaderMap, key: &str) -> Option<Response> {
-    if !authorized(headers, key) {
+/// 主密钥或任一额外密钥（面板「接入密钥」管理新增）都放行。
+fn guard(headers: &HeaderMap, state: &AppState) -> Option<Response> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .strip_prefix("Bearer ")
+        .unwrap_or("");
+    let ok_main = authorized(headers, &state.key);
+    let ok_extra = !token.is_empty()
+        && state
+            .extra_keys
+            .lock()
+            .map(|k| k.iter().any(|k| k == token))
+            .unwrap_or(false);
+    if !(ok_main || ok_extra) {
         return Some(json_error(StatusCode::UNAUTHORIZED, "Local proxy API key required"));
     }
     if headers.contains_key("origin") {
@@ -260,7 +288,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 async fn health(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Some(err) = guard(&headers, &state.key) {
+    if let Some(err) = guard(&headers, &state) {
         return err;
     }
     let snapshot = build_snapshot(&state).await;
@@ -268,7 +296,7 @@ async fn health(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 }
 
 async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Some(err) = guard(&headers, &state.key) {
+    if let Some(err) = guard(&headers, &state) {
         return err;
     }
     let store = state.store.lock().await;
@@ -304,7 +332,7 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 }
 
 async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body) -> Response {
-    if let Some(err) = guard(&headers, &state.key) {
+    if let Some(err) = guard(&headers, &state) {
         return err;
     }
     // Wait for a slot rather than rejecting: an agent client fires a whole
@@ -1106,6 +1134,15 @@ pub async fn build_snapshot(state: &AppState) -> Value {
         "endpoint": format!("http://127.0.0.1:{}/v1", store.settings.port),
         "port": store.settings.port,
         "modelsFile": store.settings.models_file,
+        "apiKeys": store.api_keys.keys.iter().map(|k| json!({
+            "id": k.id,
+            "label": k.label,
+            // 主密钥给全文（导出依赖），额外密钥只给掩码尾 4 位，降低截屏泄露面。
+            "key": if k.primary { k.key.clone() } else { mask_key(&k.key) },
+            "revealed": k.primary,
+            "createdAtMs": k.created_at_ms,
+            "primary": k.primary,
+        })).collect::<Vec<_>>(),
         "loomy": {
             "sessions": store.credentials.loomy.sessions.iter().map(|s| json!({
                 "name": s.name, "phone": s.phone, "expiresAtMs": s.expires_at_ms,

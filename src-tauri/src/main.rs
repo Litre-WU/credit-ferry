@@ -50,6 +50,19 @@ fn main() {
             let store = Store::open(dir);
             let key = store.load_or_create_api_key();
             let port = store.settings.port;
+            // 保证 api-keys.json 首位是与 api-key 文件一致的主密钥，并取一份
+            // 非主密钥明文副本灌进 AppState（guard 鉴权用）。store 随后被移动，
+            // 故在此先读。
+            let mut store = store;
+            store.api_keys.ensure_primary(&key);
+            store.save_api_keys();
+            let extra_keys: Vec<String> = store
+                .api_keys
+                .keys
+                .iter()
+                .filter(|k| !k.primary)
+                .map(|k| k.key.clone())
+                .collect();
             // A second copy can never serve: the forwarding port and the store
             // files belong to the instance already running. Exit before any
             // window exists rather than leaving a dead panel on screen.
@@ -82,6 +95,7 @@ fn main() {
                 maodao: maodao::MaodaoClient::new(),
                 maodao_login: tokio::sync::Mutex::new(None),
                 key,
+                extra_keys: std::sync::Mutex::new(extra_keys),
                 sem: Arc::new(tokio::sync::Semaphore::new(server::MAX_CONCURRENCY)),
                 maodao_sem: Arc::new(tokio::sync::Semaphore::new(server::MAODAO_CONCURRENCY)),
                 refresh_gate: tokio::sync::Mutex::new(()),
@@ -223,6 +237,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::get_api_key,
+            commands::add_api_key,
+            commands::revoke_api_key,
+            commands::reveal_api_key,
             commands::server_start,
             commands::server_stop,
             commands::server_status,

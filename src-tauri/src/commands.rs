@@ -46,6 +46,64 @@ pub fn get_api_key(ferry: FerryState<'_>) -> String {
     ferry.state.key.clone()
 }
 
+/// 新增一把额外接入密钥。完整明文只在本返回值里出现一次（面板据此复制），
+/// 之后 snapshot 只回显掩码。写完 store 后同步 AppState.extra_keys，转发口
+/// 立即放行新密钥，无需重启。
+#[tauri::command]
+pub async fn add_api_key(ferry: FerryState<'_>, label: String) -> Result<Value, String> {
+    let info = {
+        let mut store = ferry.state.store.lock().await;
+        store.add_api_key(&label)
+    };
+    sync_extra_keys(&ferry.state).await;
+    Ok(json!({
+        "id": info.id,
+        "label": info.label,
+        "key": info.key,
+        "createdAtMs": info.created_at_ms,
+    }))
+}
+
+/// 吊销一把非主密钥。主密钥拒绝（导出配置依赖它）。
+#[tauri::command]
+pub async fn revoke_api_key(ferry: FerryState<'_>, id: String) -> Result<Value, String> {
+    {
+        let mut store = ferry.state.store.lock().await;
+        store.revoke_api_key(&id)?;
+    }
+    sync_extra_keys(&ferry.state).await;
+    Ok(json!({ "revoked": id }))
+}
+
+/// 按需回显某把密钥的完整明文（本工具是用户本机自用，密钥属主即用户；
+/// snapshot 里默认掩码只为降低被动泄露，主动点「查看」应能取回）。
+#[tauri::command]
+pub async fn reveal_api_key(ferry: FerryState<'_>, id: String) -> Result<Value, String> {
+    let store = ferry.state.store.lock().await;
+    let found = store.api_keys.keys.iter().find(|k| k.id == id);
+    match found {
+        Some(k) => Ok(json!({ "id": k.id, "key": k.key })),
+        None => Err("密钥不存在".into()),
+    }
+}
+
+/// 把 store.api_keys 里的非主密钥明文同步进 AppState.extra_keys（鉴权副本）。
+async fn sync_extra_keys(state: &Arc<AppState>) {
+    let extras: Vec<String> = {
+        let store = state.store.lock().await;
+        store
+            .api_keys
+            .keys
+            .iter()
+            .filter(|k| !k.primary)
+            .map(|k| k.key.clone())
+            .collect()
+    };
+    if let Ok(mut guard) = state.extra_keys.lock() {
+        *guard = extras;
+    }
+}
+
 // ---------------------------------------------------------------- server
 
 #[tauri::command]
