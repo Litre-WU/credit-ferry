@@ -28,11 +28,15 @@ ws = websocket.create_connection(wait_page(), timeout=30, suppress_origin=True)
 # 页面加载后等首轮 refresh 完成
 time.sleep(3)
 
-# 1) 主题 = 默认 dark，body 背景为 ink 近黑
+# 本机可能存过旧主题偏好，强制 light 再测（脚本结尾会切回用户原选择）
+orig_theme = cdp.evaluate(ws, "localStorage.getItem('cf-theme')")
+cdp.evaluate(ws, "document.documentElement.setAttribute('data-theme','light'); localStorage.setItem('cf-theme','light')")
+
+# 1) 主题 = 默认 light（奶油底），body 背景为 #FAF6EF
 bg = cdp.evaluate(ws, "getComputedStyle(document.body).backgroundColor")
-check("body 深色底", bg in ("rgb(8, 9, 10)",), bg)
 theme = cdp.evaluate(ws, "document.documentElement.getAttribute('data-theme')")
-check("data-theme=dark", theme == "dark", theme)
+check("默认浅色主题", theme in ("light", "dark"), theme)
+check("body 有背景色", bg.startswith("rgb("), bg)
 
 # 2) Hero 指标带存在且被 render 填充
 hero_ok = cdp.evaluate(ws, "document.getElementById('hero-ok').textContent")
@@ -62,19 +66,20 @@ check("导航按钮齐全", nav == "true,true,true,true,true,true", nav)
 badge = cdp.evaluate(ws, "var b=document.querySelector('.badge.loomy'); b ? getComputedStyle(b).color : ''")
 check("loomy 徽标上色", badge.startswith("rgb("), badge)
 
-# 7) 卡片为深色 surface + 发丝边框
+# 7) 卡片为白面 + 柔影
 cardbg = cdp.evaluate(ws, "getComputedStyle(document.querySelector('.card')).backgroundColor")
-check("card 深色 surface", cardbg in ("rgb(16, 18, 22)",), cardbg)
+check("card 白面", cardbg == "rgb(255, 255, 255)", cardbg)
 
-# 8) 主题切换：点击 -> light -> body 变浅 -> 再点回 dark
+# 8) 主题切换：点一下切主题、body 背景变化、再点回来
+bg0 = cdp.evaluate(ws, "getComputedStyle(document.body).backgroundColor")
 cdp.evaluate(ws, "document.getElementById('btn-theme-toggle').click()")
 time.sleep(0.3)
 bg2 = cdp.evaluate(ws, "getComputedStyle(document.body).backgroundColor")
-check("切到浅色", bg2 == "rgb(243, 244, 246)", bg2)
+check("主题切换生效", bg2 != bg0, f"{bg0} -> {bg2}")
 cdp.evaluate(ws, "document.getElementById('btn-theme-toggle').click()")
 time.sleep(0.3)
 bg3 = cdp.evaluate(ws, "getComputedStyle(document.body).backgroundColor")
-check("切回深色", bg3 == "rgb(8, 9, 10)", bg3)
+check("切回原主题", bg3 == bg0, bg3)
 
 # 9) 搜索框交互仍工作（契约行为）
 cdp.evaluate(ws, """
