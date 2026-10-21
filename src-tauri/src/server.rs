@@ -102,6 +102,9 @@ pub struct AppState {
     pub keepalive_started: std::sync::atomic::AtomicBool,
     /// 统一验证（全渠道串行重探）互斥：重复点击不叠跑。
     pub verify_all_busy: std::sync::atomic::AtomicBool,
+    /// 转发口实际在监听时为 true（serve() bind 成功置位、退出/被 abort 清零）。
+    /// 快照直接透出，省掉前端每轮单独一次 server_status IPC。
+    pub server_running: std::sync::atomic::AtomicBool,
 }
 
 /// What the upstreams hand back after a chat call.
@@ -209,11 +212,25 @@ pub fn upstream_model_id(entry: &ModelEntry) -> String {
 /// turn, so the ferry clamps instead and advertises the clamped number.
 pub const MAX_TOKENS_CAP: u64 = 65_536;
 
-/// Lower an oversized `max_tokens` to what the upstream will accept.
-pub fn clamp_max_tokens(body: &mut Value) {
+/// Fit `max_tokens` to what the upstream will actually accept.
+///
+/// Two jobs. First, lower an oversized client value to the gateway cap (see
+/// [`MAX_TOKENS_CAP`]). Second, when the client omits `max_tokens` entirely,
+/// inject the model's own advertised output ceiling so reasoning models and
+/// long answers are not silently truncated by whichever small default the
+/// upstream gateway happens to pick. A `model_max_output` of 0 means the
+/// catalog never told us, and the request is left alone for the upstream's
+/// own default — inventing a number there would risk a 400 on strict gates.
+pub fn clamp_max_tokens(body: &mut Value, model_max_output: u64) {
     let asked = body.get("max_tokens").and_then(|v| v.as_u64());
-    if asked.map(|n| n > MAX_TOKENS_CAP).unwrap_or(false) {
-        body["max_tokens"] = Value::from(MAX_TOKENS_CAP);
+    match asked {
+        Some(n) if n > MAX_TOKENS_CAP => body["max_tokens"] = Value::from(MAX_TOKENS_CAP),
+        Some(_) => {}
+        None => {
+            if model_max_output > 0 {
+                body["max_tokens"] = Value::from(model_max_output.min(MAX_TOKENS_CAP));
+            }
+        }
     }
 }
 
@@ -351,8 +368,12 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
         Ok(v) => v,
         Err(_) => return json_error(StatusCode::BAD_REQUEST, "Invalid JSON"),
     };
-    let requested = payload.get("model").and_then(|m| m.as_str()).unwrap_or("");
-    let entry = match resolve_model(&state, requested).await {
+    let requested = payload
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let entry = match resolve_model(&state, &requested).await {
         Some(e) => e,
         None => {
             return json_error(
@@ -363,15 +384,17 @@ async fn chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body
     };
 
     let stream = payload.get("stream") == Some(&Value::Bool(true));
-    // Rewrite the model id to the upstream id the gateway expects.
-    let mut upstream_body = payload.clone();
+    // Rewrite the model id to the upstream id the gateway expects. The body
+    // moves into `upstream_body` (no deep clone): agent payloads carry whole
+    // conversation histories and used to be copied in full on every turn.
+    let mut upstream_body = payload;
     if let Some(obj) = upstream_body.as_object_mut() {
         obj.insert("model".into(), Value::String(entry.upstream_id.clone()));
     }
     // Text-only upstreams (Loomy / Maodao) reject image content; strip it so a
     // multimodal client request still succeeds on a vision-less model.
     strip_image_content(&mut upstream_body, entry.vision);
-    clamp_max_tokens(&mut upstream_body);
+    clamp_max_tokens(&mut upstream_body, entry.max_output);
 
     let response = match entry.source.as_str() {
         "opencode" => {
@@ -1255,6 +1278,9 @@ pub async fn build_snapshot(state: &AppState) -> Value {
         // P1-3 keepalive loop state (rounds, notes, terminal blocks).
         "keepalive": crate::keepalive::keepalive_json(&store),
         "verifyAllRunning": state.verify_all_busy.load(std::sync::atomic::Ordering::SeqCst),
+        // 转发口监听状态：axum serve 的 bind 是否成功（面板 pill 直接读这里，
+        // 省掉每轮一次 server_status IPC）。
+        "serverRunning": state.server_running.load(std::sync::atomic::Ordering::SeqCst),
         "modelsFetchedAtMs": store.models.fetched_at_ms,
         "ledger": ledger,
         "ledgerTotal": ledger_total,
@@ -1291,8 +1317,19 @@ fn model_json(store: &crate::store::Store, entry: &ModelEntry) -> Value {
 /// Start the axum server on the loopback interface.
 pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
     let port = { state.store.lock().await.settings.port };
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    axum::serve(listener, router(state)).await
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            state.server_running.store(false, std::sync::atomic::Ordering::SeqCst);
+            return Err(e);
+        }
+    };
+    state.server_running.store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = axum::serve(listener, router(state.clone())).await;
+    // Normal exit (never reached when the task is aborted — server_stop
+    // clears the flag itself in that path).
+    state.server_running.store(false, std::sync::atomic::Ordering::SeqCst);
+    result
 }
 
 /// Idle timeout guard: nothing to do, the server runs until the app quits.
@@ -1309,16 +1346,35 @@ mod tests {
     #[test]
     fn clamp_lowers_only_what_the_upstream_would_reject() {
         let mut over = json!({ "max_tokens": 393216 });
-        clamp_max_tokens(&mut over);
+        clamp_max_tokens(&mut over, 8192);
         assert_eq!(over["max_tokens"], Value::from(MAX_TOKENS_CAP));
 
         let mut fits = json!({ "max_tokens": 512 });
-        clamp_max_tokens(&mut fits);
+        clamp_max_tokens(&mut fits, 8192);
         assert_eq!(fits["max_tokens"], Value::from(512));
 
+        // No client value and no catalog value: leave it for the upstream.
         let mut absent = json!({ "model": "m" });
-        clamp_max_tokens(&mut absent);
+        clamp_max_tokens(&mut absent, 0);
         assert!(absent.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn absent_max_tokens_inherits_the_model_advertised_ceiling() {
+        // The client did not ask; the ferry gives it the model's own max.
+        let mut body = json!({ "model": "m" });
+        clamp_max_tokens(&mut body, 32_768);
+        assert_eq!(body["max_tokens"], Value::from(32_768));
+
+        // The advertised ceiling past the gateway cap clamps down.
+        let mut huge = json!({ "model": "m" });
+        clamp_max_tokens(&mut huge, 393_216);
+        assert_eq!(huge["max_tokens"], Value::from(MAX_TOKENS_CAP));
+
+        // A client value always wins over the catalog default.
+        let mut asked = json!({ "model": "m", "max_tokens": 256 });
+        clamp_max_tokens(&mut asked, 32_768);
+        assert_eq!(asked["max_tokens"], Value::from(256));
     }
 
     fn multimodal() -> Value {

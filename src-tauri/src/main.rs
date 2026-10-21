@@ -101,6 +101,7 @@ fn main() {
                 refresh_gate: tokio::sync::Mutex::new(()),
                 keepalive_started: std::sync::atomic::AtomicBool::new(false),
                 verify_all_busy: std::sync::atomic::AtomicBool::new(false),
+                server_running: std::sync::atomic::AtomicBool::new(false),
                 })
             };
             let ferry = Arc::new(Ferry {

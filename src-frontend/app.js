@@ -213,6 +213,12 @@
   function render(snap) {
     $('endpoint-view').textContent = snap.endpoint;
     if ($('endpoint-view2')) $('endpoint-view2').textContent = snap.endpoint;
+    // 服务状态随快照返回（snap.serverRunning），不再单独走 server_status IPC。
+    var pill = $('server-pill');
+    if (pill) {
+      pill.textContent = snap.serverRunning ? ('服务运行中 :' + snap.port) : '服务未启动';
+      pill.className = 'pill ' + (snap.serverRunning ? 'on' : 'off');
+    }
     $('api-key-view').textContent = '••••••••' ;
     renderKeys(snap.apiKeys || []);
     // 统一验证进行中：按钮禁用 + 进度文案（snapshot 每 3 秒轮询带回）。
@@ -394,11 +400,6 @@
 
   function refresh() {
     invoke('get_snapshot').then(render).catch(function (e) { toast('状态读取失败：' + e); });
-    invoke('server_status').then(function (s) {
-      var pill = $('server-pill');
-      pill.textContent = s.running ? ('服务运行中 :' + s.port) : '服务未启动';
-      pill.className = 'pill ' + (s.running ? 'on' : 'off');
-    }).catch(function () {});
   }
 
   // ------------------------------------------------------------- actions
@@ -1070,5 +1071,19 @@
   // boot
   refresh();
   loadConnectors();
-  setInterval(refresh, 3000);
+  // 面板被隐藏（最小化到托盘 / 切走）时暂停轮询，重新可见时立刻补一次刷新。
+  // 快照一次 IPC 就带回服务状态、密钥、模型、账本、保活等全部面板数据。
+  var pollTimer = null;
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(refresh, 3000);
+  }
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopPolling();
+    else { refresh(); startPolling(); }
+  });
+  startPolling();
 })();

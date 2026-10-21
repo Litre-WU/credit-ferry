@@ -134,6 +134,12 @@ pub async fn server_stop(ferry: FerryState<'_>) -> Result<Value, String> {
     if let Some(handle) = guard.take() {
         handle.abort();
     }
+    // abort() 让 serve()  future 直接消失，永远走不到它自己的清零分支，
+    // 所以这里必须手动把监听标志落回 false。
+    ferry
+        .state
+        .server_running
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     Ok(json!({ "running": false }))
 }
 
