@@ -100,7 +100,7 @@
         if (m.probeOk === true) {
           st = '<span class="badge ok" title="' + esc(m.probeNote || '') + '">✓ 可调用</span>';
         } else if (m.probeOk === false) {
-          st = '<span class="badge no" style="color:#b91c1c;border-color:#fecaca;background:#fef2f2" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
+          st = '<span class="badge err" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
         } else {
           st = '<span class="badge no" title="尚未验证，点顶部「统一验证可调用性」">未验证</span>';
         }
@@ -210,8 +210,32 @@
     return probed.length === 0 ? '—' : (ok + '/' + probed.length);
   }
 
-  function render(snap) {
-    $('endpoint-view').textContent = snap.endpoint;
+  // Hero 指标带：摆渡池总况一屏速览（可调用模型数 / 端点 / 三渠道余额 / 账本量）。
+  function renderHero(snap) {
+    var okCount = 0;
+    [['loomy'], ['raccoon'], ['opencode'], ['maodao', snap.maodao], ['kilo', snap.kilo],
+     ['zen', snap.zen], ['buddy', snap.buddy], ['workbuddy', snap.workbuddy],
+     ['lobsterai', snap.lobsterai], ['trae', snap.trae], ['minimax', snap.minimax], ['cline', snap.cline]]
+      .forEach(function (pair) {
+        var ch = pair[1] || snap[pair[0]] || {};
+        (ch.models || []).forEach(function (m) { if (m.probeOk === true) okCount++; });
+      });
+    var total = (snap.loomy.models || []).length + (snap.raccoon.models || []).length
+      + (snap.opencode.models || []).length + ((snap.maodao || {}).models || []).length
+      + ((snap.kilo || {}).models || []).length + ((snap.zen || {}).models || []).length
+      + ((snap.buddy || {}).models || []).length + ((snap.workbuddy || {}).models || []).length
+      + ((snap.lobsterai || {}).models || []).length + ((snap.trae || {}).models || []).length
+      + ((snap.minimax || {}).models || []).length + ((snap.cline || {}).models || []).length;
+    var el = $('hero-ok'); if (el) el.textContent = okCount;
+    var et = $('hero-ok-total'); if (et) et.textContent = ' / ' + total;
+    var ep = $('hero-endpoint'); if (ep) ep.textContent = snap.endpoint ? snap.endpoint.replace(/^https?:\/\//, '') : '127.0.0.1:' + snap.port + '/v1';
+    var hl = $('hero-loomy'); if (hl) hl.textContent = snap.loomy.balance == null ? '—' : fmtNum(snap.loomy.balance);
+    var hr = $('hero-raccoon'); if (hr) hr.textContent = (snap.raccoon || {}).balance == null ? '—' : fmtNum(snap.raccoon.balance);
+    var hm = $('hero-maodao'); if (hm) hm.textContent = (snap.maodao && snap.maodao.balance != null) ? fmtNum(snap.maodao.balance) : '—';
+    var hd = $('hero-ledger'); if (hd) hd.textContent = (snap.ledgerTotal != null ? snap.ledgerTotal : (snap.ledger || []).length);
+  }
+
+  function render(snap) {    $('endpoint-view').textContent = snap.endpoint;
     if ($('endpoint-view2')) $('endpoint-view2').textContent = snap.endpoint;
     // 服务状态随快照返回（snap.serverRunning），不再单独走 server_status IPC。
     var pill = $('server-pill');
@@ -219,6 +243,7 @@
       pill.textContent = snap.serverRunning ? ('服务运行中 :' + snap.port) : '服务未启动';
       pill.className = 'pill ' + (snap.serverRunning ? 'on' : 'off');
     }
+    renderHero(snap);
     $('api-key-view').textContent = '••••••••' ;
     renderKeys(snap.apiKeys || []);
     // 统一验证进行中：按钮禁用 + 进度文案（snapshot 每 3 秒轮询带回）。
@@ -365,12 +390,12 @@
       : '后台每 ' + (ka.intervalMinutes || 30) + ' 分钟巡检一轮（过期前 ' + (ka.leadMinutes || 60) + ' 分钟窗内才轮换）';
     var blocksEl = $('ka-blocks');
     if (ka.blocks && ka.blocks.length) {
-      blocksEl.style.display = 'block';
+      blocksEl.classList.add('show');
       blocksEl.innerHTML = '⚠ 终态标记（需重新登录，24 小时后自动重查）：' + ka.blocks.map(function (b) {
         return '<b>' + (kaNames[b.source] || b.source) + '</b> ' + esc(b.reason) + '（' + fmtTime(b.atMs) + '）';
       }).join('；');
     } else {
-      blocksEl.style.display = 'none';
+      blocksEl.classList.remove('show');
       blocksEl.innerHTML = '';
     }
     lastModelRows = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models).concat(cl.models);
@@ -941,7 +966,7 @@
   function showNewKeyBanner(r) {
     var b = $('newkey-banner');
     if (!b) return;
-    b.style.display = 'block';
+    b.classList.add('show');
     b.innerHTML = '<div>已生成「<b>' + esc(r.label) + '</b>」，密钥：<code style="user-select:all">' + esc(r.key) + '</code></div>' +
       '<div style="margin-top:6px"><button class="small" id="bn-copy">复制</button> ' +
       '<button class="small" id="bn-close">我已保存，关闭</button> ' +
@@ -949,7 +974,7 @@
     var c = document.getElementById('bn-copy');
     if (c) c.addEventListener('click', function () { copyText(r.key, '密钥已复制'); });
     var x = document.getElementById('bn-close');
-    if (x) x.addEventListener('click', function () { b.style.display = 'none'; b.innerHTML = ''; });
+    if (x) x.addEventListener('click', function () { b.classList.remove('show'); b.innerHTML = ''; });
   }
   if ($('btn-add-key')) {
     $('btn-add-key').addEventListener('click', function () {
@@ -1067,6 +1092,19 @@
   }
 
   $('btn-connectors-refresh').addEventListener('click', loadConnectors);
+
+  // ---- 主题切换（深/浅）：localStorage 持久化，默认深色控制台 ----
+  (function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem('cf-theme'); } catch (e) {}
+    if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+    var btn = $('btn-theme-toggle');
+    if (btn) btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', cur);
+      try { localStorage.setItem('cf-theme', cur); } catch (e) {}
+    });
+  })();
 
   // boot
   refresh();

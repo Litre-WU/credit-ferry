@@ -30,3 +30,5 @@ src-tauri/icons/_icons_backup*/
 Thumbs.db
 
 # NOTE: Cargo.lock is intentionally TRACKED (reproducible CI builds).
+ui-dark.png
+ui-light.png
