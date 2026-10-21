@@ -58,6 +58,9 @@
   var lastLedgerRows = [];
   var lastLedgerTotal = 0;
 
+  // 转发接口全文（snap.endpoint，含 scheme）——「复制」按钮的数据源，随快照刷新。
+  var latestEndpoint = 'http://127.0.0.1:6666/v1';
+
   function sourceBadge(src) {
     var names = {
       raccoon: '小浣熊', opencode: 'OpenCode', maodao: '码道', kilo: 'Kilo', zen: 'Zen',
@@ -239,6 +242,7 @@
 
   function render(snap) {    $('endpoint-view').textContent = snap.endpoint;
     if ($('endpoint-view2')) $('endpoint-view2').textContent = snap.endpoint;
+    latestEndpoint = snap.endpoint || latestEndpoint;
     // 服务状态随快照返回（snap.serverRunning），不再单独走 server_status IPC。
     var pill = $('server-pill');
     if (pill) {
@@ -849,6 +853,15 @@
       var btn = ev.target.closest('[data-copy-model]');
       if (!btn) return;
       copyText(btn.getAttribute('data-copy-model'), '模型名称已复制');
+    });
+  })();
+
+  // ---- 转发接口一键复制：三处（Hero 端点卡 / 密钥区题注 / 模型区题注）统一委托到 document ----
+  (function bindEndpointCopy() {
+    document.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('[data-copy-endpoint]');
+      if (!btn) return;
+      copyText(latestEndpoint, '转发接口已复制');
     });
   })();
 
