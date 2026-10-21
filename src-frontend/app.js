@@ -104,7 +104,9 @@
         } else {
           st = '<span class="badge no" title="尚未验证，点顶部「统一验证可调用性」">未验证</span>';
         }
-        return '<tr><td><b>' + esc(m.name || m.clientId) + '</b></td>'
+        var disp = m.name || m.clientId;
+        return '<tr><td><b>' + esc(disp) + '</b> ' +
+          '<button class="copy-btn" data-copy-model="' + esc(disp) + '" title="复制模型名称">复制</button></td>'
           + '<td>' + sourceBadge(m.source) + '</td>'
           + '<td class="muted" style="font-size:12px">' + esc(m.clientId) + '</td>'
           + '<td>' + (m.vision ? '<span class="badge ok">✓</span>' : '<span class="badge no">—</span>') + '</td>'
@@ -841,6 +843,13 @@
     if (okEl) okEl.addEventListener('change', function () { onFilter(true); });
     if ($('btn-model-prev')) $('btn-model-prev').addEventListener('click', function () { modelState.page -= 1; if (modelState.page < 1) modelState.page = 1; renderModelList(); });
     if ($('btn-model-next')) $('btn-model-next').addEventListener('click', function () { modelState.page += 1; renderModelList(); });
+    // 模型名称一键复制：行每轮重渲染，委托绑在表格上（只绑一次）。
+    var mtable = $('models-table');
+    if (mtable) mtable.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('[data-copy-model]');
+      if (!btn) return;
+      copyText(btn.getAttribute('data-copy-model'), '模型名称已复制');
+    });
   })();
 
   // ---- 积分账本：翻页（每页 10 条） ----
@@ -949,13 +958,19 @@
   });
 
   function copyText(text, okMsg) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () { toast(okMsg); });
-    } else {
+    // webview 未聚焦时 clipboard.writeText 会 reject（面板在后台点复制），
+    // 必须接 catch 回退到 execCommand，否则静默失败、连 toast 都不出。
+    function legacyCopy() {
       var ta = document.createElement('textarea');
       ta.value = text; document.body.appendChild(ta); ta.select();
-      document.execCommand('copy'); document.body.removeChild(ta);
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
       toast(okMsg);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast(okMsg); }, legacyCopy);
+    } else {
+      legacyCopy();
     }
   }
   $('btn-copy-key').addEventListener('click', function () {

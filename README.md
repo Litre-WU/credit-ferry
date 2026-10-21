@@ -34,6 +34,8 @@ npm run dev
 4. **导出**：面板「导出到客户端」里五处一键配置——WorkBuddy CN（`~/.workbuddy/models.json`）、WorkBuddy 国际版（`~/.workbuddy-ai/models.json`）、Qoder CN（`~/.qoder-cn/settings.json`）、Qoder 国际版（`~/.qoder/settings.json`）、DeepSeek Harness（`~/.dsh/profiles/desktop/cordis.patch.yml` + `.credentials.yaml`）。全部自动备份、只动自己标记（`creditFerryOwner: credit-ferry-v1` / 成对注释块）的条目，退出托盘菜单会一并摘除。
 5. **DSH 连接器**：同一张面板可以按 DSH 内核版本安装/升级/启停/卸载 `dsh-workbuddy-connect` 与 `dsh-qoder-connect` 两个社区插件（详见下一节）。
 
+面板支持浅色/深色主题切换（顶栏「◐ 主题」，记忆到 localStorage），模型列表每行名称旁有「复制」按钮一键复制模型名称（完整客户端 id 在相邻列展示；剪贴板 API 不可用时自动回退 execCommand）。
+
 ## 接进客户端
 
 **WorkBuddy**：`~/.workbuddy/models.json` 由工具合并写入（`creditFerryOwner: "credit-ferry-v1"` 标记，退出时自动摘除，用户手写条目不动）。

@@ -32,3 +32,4 @@ Thumbs.db
 # NOTE: Cargo.lock is intentionally TRACKED (reproducible CI builds).
 ui-dark.png
 ui-light.png
+ui-pastel.png

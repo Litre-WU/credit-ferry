@@ -127,24 +127,27 @@
   .section-title::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
   .section-title::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
 
-  /* ---------- 控件：胶囊 + 按压回弹 ---------- */
+  /* ---------- 控件：胶囊 + 粉彩 + 按压回弹 ---------- */
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button {
     font-family: var(--sans); font-size: 13px; font-weight: 600; padding: 7px 16px;
-    border-radius: 999px; border: 1px solid var(--hairline-strong);
-    background: var(--surface-1); color: var(--text-hi); cursor: pointer;
+    border-radius: 999px; border: 1px solid color-mix(in srgb, var(--hairline-strong) 40%, #E893B8 60%);
+    background: color-mix(in srgb, var(--surface-1) 80%, #F2AECB 20%); color: var(--text-hi); cursor: pointer;
     transition: background .15s var(--ease), border-color .15s var(--ease), transform .12s var(--spring), box-shadow .15s var(--ease);
   }
-  button:hover { background: var(--surface-2); border-color: color-mix(in srgb, var(--hairline-strong) 50%, var(--accent) 40%); transform: translateY(-1px); }
+  button:hover { background: color-mix(in srgb, var(--surface-1) 64%, #F2AECB 36%); border-color: color-mix(in srgb, var(--hairline-strong) 20%, #E893B8 80%); transform: translateY(-1px); }
   button:active { transform: scale(.96); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #FFFFFF; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
-  button.primary:hover { background: color-mix(in srgb, var(--accent) 88%, white); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent); }
-  button.danger { color: var(--err); border-color: var(--err-line); background: transparent; box-shadow: none; }
+  button.primary { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #BFE9CF)); border-color: var(--accent); color: #FFFFFF; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+  button.primary:hover { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, white), color-mix(in srgb, var(--accent) 45%, #D5F2E0)); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent); }
+  button.danger { color: var(--err); border-color: var(--err-line); background: color-mix(in srgb, var(--surface-1) 88%, #F9CFDD 12%); box-shadow: none; }
   button.danger:hover { background: var(--err-bg); }
   button.small { padding: 4px 12px; font-size: 12px; }
   button.icon-btn { padding: 5px 12px; font-size: 12px; color: var(--text-mid); box-shadow: none; }
   button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+  /* 表格里的一键复制按钮：平时淡淡的，hover 单元格时浮现 */
+  button.copy-btn { padding: 1px 9px; font-size: 11px; border-radius: 999px; background: transparent; border-color: var(--hairline); color: var(--text-lo); box-shadow: none; vertical-align: 1px; }
+  button.copy-btn:hover { background: var(--accent-dim); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent-deep); }
   input[type=text], select {
     font-family: var(--sans); font-size: 13px; padding: 7px 14px;
     border: 1px solid var(--hairline-strong); border-radius: 999px;
