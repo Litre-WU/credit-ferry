@@ -292,6 +292,9 @@ async fn cors(req: axum::extract::Request, next: axum::middleware::Next) -> Resp
                 ("Access-Control-Allow-Origin", acao),
                 ("Access-Control-Allow-Methods", "GET, POST, OPTIONS".into()),
                 ("Access-Control-Allow-Headers", "Authorization, Content-Type".into()),
+                // Chromium ≥138 PNA preflight: a public https page probing a
+                // loopback server must see this or the real request is blocked.
+                ("Access-Control-Allow-Private-Network", "true".into()),
                 ("Access-Control-Max-Age", "600".into()),
             ],
         )
