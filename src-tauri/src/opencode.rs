@@ -97,7 +97,24 @@ pub fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
     cmd
 }
 
+/// Windows refuses to CreateProcess a non-PE file with a GUI error box
+/// ("不支持的 16 位应用程序") — and the npm tarball's `bin/opencode.exe` is
+/// exactly that: a JS stub. Probe the header before ever executing a
+/// candidate; text stubs are rejected silently.
+fn looks_executable(file: &Path) -> bool {
+    match std::fs::File::open(file) {
+        Ok(mut f) => {
+            let mut buf = [0u8; 2];
+            f.read_exact(&mut buf).is_ok() && buf == *b"MZ"
+        }
+        Err(_) => false,
+    }
+}
+
 fn version_of(file: &Path) -> Option<String> {
+    if !looks_executable(file) {
+        return None;
+    }
     let out = quiet(std::process::Command::new(file)
         .arg("--version")
         .stdout(Stdio::piped())
@@ -319,6 +336,16 @@ pub async fn find_runtime(data_dir: &Path, status: &(dyn Fn(&str) + Sync)) -> Re
     }
     let _ = std::fs::remove_dir_all(&staging);
     let binary = extracted.ok_or("OpenCode 包内未找到可执行文件")?;
+    // On Windows the tarball ships a JS stub under bin/opencode.exe (the real
+    // binary is fetched by a postinstall we deliberately do not run). Never
+    // write a non-PE stub to disk — fall back straight away.
+    if !binary.starts_with(b"MZ") {
+        if let Some((v, file)) = best {
+            eprintln!("opencode: 下载包不含真实二进制（stub），回退本机已有运行时 {}", v);
+            return Ok(file);
+        }
+        return Err("下载的 OpenCode 包不含可执行二进制（仅 JS stub）".into());
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -821,4 +848,26 @@ fn calls_schema(tools: &[Value], parallel: bool) -> Value {
 
 fn num(value: Option<&Value>) -> Option<f64> {
     value.and_then(|v| v.as_f64())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The npm Windows stub is a JS text file; executing it makes Windows pop
+    /// the "不支持的 16 位应用程序" GUI error. looks_executable must reject it
+    /// without ever spawning a process.
+    #[test]
+    fn js_stub_is_not_executable_but_pe_headers_are() {
+        let dir = std::env::temp_dir().join(format!("cf-stub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("opencode.exe");
+        std::fs::write(&stub, b"#!/usr/bin/env node\nrequire('./cli.js')\n").unwrap();
+        assert!(!looks_executable(&stub));
+        let pe = dir.join("real.exe");
+        std::fs::write(&pe, b"MZ\x90\x00fake").unwrap();
+        assert!(looks_executable(&pe));
+        assert!(!looks_executable(&dir.join("missing.exe")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
