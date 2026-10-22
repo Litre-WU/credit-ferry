@@ -61,6 +61,15 @@
   // 转发接口全文（snap.endpoint，含 scheme）——「复制」按钮的数据源，随快照刷新。
   var latestEndpoint = 'http://127.0.0.1:6666/v1';
 
+  // 门控渠道：上游服务端强制官方 CLI 身份（直连 API 有封号风险），本工具
+  // 只接入登录态/目录/额度展示，模型不发布到 /v1、chat 不转发。行内不渲染
+  // 复制按钮（复制了也调不通），状态列说明原因。
+  var GATED_SOURCES = {
+    freebuff: '上游强制官方 CLI（直连 API 返回 403 并附封号警告），仅供查看目录与每日额度',
+    qoder: '请求体需 WASM 签名，普通 Bearer 会被判 403，仅供查看目录与签到额度',
+    qodercn: '请求体需 WASM 签名，普通 Bearer 会被判 403，仅供查看目录与签到额度'
+  };
+
   function sourceBadge(src) {
     var names = {
       raccoon: '小浣熊', opencode: 'OpenCode', maodao: '码道', kilo: 'Kilo', zen: 'Zen',
@@ -99,8 +108,11 @@
         + (lastModelRows.length ? '没有匹配当前筛选的模型' : '暂无模型 — 请先登录上游并刷新') + '</td></tr>';
     } else {
       tbody.innerHTML = pageRows.map(function (m) {
+        var gated = GATED_SOURCES[m.source];
         var st;
-        if (m.probeOk === true) {
+        if (gated) {
+          st = '<span class="badge no" title="' + esc(gated) + '">🔒 仅目录·不转发</span>';
+        } else if (m.probeOk === true) {
           st = '<span class="badge ok" title="' + esc(m.probeNote || '') + '">✓ 可调用</span>';
         } else if (m.probeOk === false) {
           st = '<span class="badge err" title="' + esc(m.probeNote || '') + '">✗ ' + esc(m.probeNote || '不可用') + '</span>';
@@ -111,8 +123,10 @@
         // 复制的是完整客户端 id（如 `Loomy · DeepSeek V4.1 Flash`）——转发口
         // resolve_model 只认这个或上游原始 id；纯显示名（无渠道前缀）粘进
         // WorkBuddy 会 400「无法连接到模型服务」，故 data 用 clientId。
-        return '<tr><td><b>' + esc(disp) + '</b> ' +
-          '<button class="copy-btn" data-copy-model="' + esc(m.clientId) + '" title="复制完整模型 id（接入客户端用这个）">复制</button></td>'
+        // 门控渠道的模型调不通，不给复制按钮。
+        var copyBtn = gated ? '' :
+          '<button class="copy-btn" data-copy-model="' + esc(m.clientId) + '" title="复制完整模型 id（接入客户端用这个）">复制</button>';
+        return '<tr><td><b>' + esc(disp) + '</b> ' + copyBtn + '</td>'
           + '<td>' + sourceBadge(m.source) + '</td>'
           + '<td class="muted" style="font-size:12px">' + esc(m.clientId) + '</td>'
           + '<td>' + (m.vision ? '<span class="badge ok">✓</span>' : '<span class="badge no">—</span>') + '</td>'
@@ -407,7 +421,7 @@
       blocksEl.classList.remove('show');
       blocksEl.innerHTML = '';
     }
-    lastModelRows = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models).concat(cl.models);
+    lastModelRows = snap.loomy.models.concat(snap.raccoon.models).concat(snap.opencode.models).concat(md.models).concat(kl.models).concat(zn.models).concat(bd.models).concat(wb.models).concat(lb.models).concat(tr.models).concat(mm.models).concat(cl.models).concat((snap.freebuff || {}).models || []);
     // 供应商下拉只建一次（渠道集合固定）。
     var sel = $('model-source');
     if (sel && sel.options.length <= 1) {
