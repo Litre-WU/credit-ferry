@@ -993,6 +993,13 @@ pub async fn maodao_import_client(ferry: FerryState<'_>) -> Result<Value, String
     maodao_refresh_inner(&ferry.state).await
 }
 
+/// Open the project's GitHub repository in the system browser. The URL is a
+/// compile-time constant from Cargo.toml, so there is no injection surface.
+#[tauri::command]
+pub fn open_repo() {
+    open_in_browser(env!("CARGO_PKG_REPOSITORY"));
+}
+
 /// Start a browser login: returns the portal URL the panel should open.
 #[tauri::command]
 pub async fn maodao_login_start(ferry: FerryState<'_>) -> Result<Value, String> {

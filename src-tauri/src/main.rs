@@ -241,6 +241,7 @@ fn main() {
             commands::add_api_key,
             commands::revoke_api_key,
             commands::reveal_api_key,
+            commands::open_repo,
             commands::server_start,
             commands::server_stop,
             commands::server_status,

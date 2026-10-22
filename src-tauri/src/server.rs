@@ -1296,6 +1296,7 @@ pub async fn build_snapshot(state: &AppState) -> Value {
     let ledger: Vec<&LedgerEntry> = store.ledger.entries.iter().rev().take(200).collect();
     json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "repo": env!("CARGO_PKG_REPOSITORY"),
         "endpoint": format!("http://127.0.0.1:{}/v1", store.settings.port),
         "port": store.settings.port,
         "modelsFile": store.settings.models_file,

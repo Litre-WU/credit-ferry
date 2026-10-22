@@ -1,8 +1,9 @@
 {
   "name": "credit-ferry",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "description": "CreditFerry 积分摆渡 — 把 Loomy 与小浣熊的积分模型以本机 OpenAI 兼容口转发给 WorkBuddy / Qwen Code / DeepSeekHarness",
+  "repository": "https://github.com/Litre-WU/credit-ferry",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

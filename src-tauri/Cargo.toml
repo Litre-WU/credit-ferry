@@ -1,8 +1,9 @@
 [package]
 name = "credit-ferry"
-version = "0.1.10"
+version = "0.1.11"
 description = "CreditFerry — bridge Loomy & Xiaohuanxiong credit-backed models to local OpenAI-compatible clients"
 authors = ["CreditFerry"]
+repository = "https://github.com/Litre-WU/credit-ferry"
 edition = "2021"
 
 [build-dependencies]

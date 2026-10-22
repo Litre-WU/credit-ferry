@@ -60,6 +60,8 @@
 
   // 转发接口全文（snap.endpoint，含 scheme）——「复制」按钮的数据源，随快照刷新。
   var latestEndpoint = 'http://127.0.0.1:6666/v1';
+  // GitHub 仓库地址（Cargo.toml repository，编译期注入 snapshot）。
+  var latestRepo = 'https://github.com/Litre-WU/credit-ferry';
 
   // 门控渠道：上游服务端强制官方 CLI 身份（直连 API 有封号风险），本工具
   // 只接入登录态/目录/额度展示，模型不发布到 /v1、chat 不转发。行内不渲染
@@ -258,6 +260,10 @@
   }
 
   function render(snap) {    $('endpoint-view').textContent = snap.endpoint;
+    // 版本与仓库地址：顶栏徽标 + 页脚（徽标点击等同打开仓库）。
+    $('app-version').textContent = 'v' + (snap.version || '—');
+    if ($('footer-version')) $('footer-version').textContent = 'v' + (snap.version || '—');
+    if ($('footer-repo') && snap.repo) { $('footer-repo').textContent = snap.repo; latestRepo = snap.repo; }
     if ($('endpoint-view2')) $('endpoint-view2').textContent = snap.endpoint;
     latestEndpoint = snap.endpoint || latestEndpoint;
     // 服务状态随快照返回（snap.serverRunning），不再单独走 server_status IPC。
@@ -1150,6 +1156,19 @@
       try { localStorage.setItem('cf-theme', cur); } catch (e) {}
     });
   })();
+
+  // ---- 打开 GitHub 仓库（顶栏按钮 / 版本徽标均可） ----
+  function openRepo() {
+    invoke('open_repo').then(function () {
+      toast('已打开 GitHub 仓库');
+    }).catch(function (e) {
+      toast('打开仓库失败：' + e + ' · 地址 ' + (latestRepo || 'https://github.com/Litre-WU/credit-ferry'));
+    });
+  }
+  var repoBtn = $('btn-open-repo');
+  if (repoBtn) repoBtn.addEventListener('click', openRepo);
+  var verBadge = $('app-version');
+  if (verBadge) verBadge.addEventListener('click', openRepo);
 
   // boot
   refresh();

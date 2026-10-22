@@ -90,6 +90,9 @@
   .topbar h1 { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
   .topbar .sub { font-size: 11.5px; color: var(--text-lo); max-width: 52ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar .spacer { flex: 1; }
+  .ver-badge { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--accent-deep); background: var(--accent-dim); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 999px; padding: 2px 9px; margin-left: 8px; vertical-align: 2px; letter-spacing: .02em; cursor: default; }
+  .repo-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-mid); box-shadow: none; }
+  .repo-btn:hover { background: var(--accent-dim); border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent-deep); }
 
   .pill { font-family: var(--mono); font-size: 11.5px; font-weight: 600; padding: 5px 14px; border-radius: 999px; display: inline-flex; align-items: center; gap: 7px; letter-spacing: .02em; box-shadow: var(--shadow-1); }
   .pill.on  { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-line); }
@@ -240,10 +243,11 @@
 <div class="topbar">
   <img class="logo" src="./icon.png" alt="">
   <div>
-    <h1>CreditFerry 积分摆渡</h1>
+    <h1>CreditFerry 积分摆渡<span class="ver-badge" id="app-version" title="当前安装版本（点击查看 GitHub 仓库）">v—</span></h1>
     <div class="sub">Loomy · 小浣熊 · OpenCode · 华为码道 · Kilo 免费池 · Zen 车道 · CodeBuddy · WorkBuddy · LobsterAI · TRAE · MiniMax · Cline · Freebuff → 本机 OpenAI 兼容口</div>
   </div>
   <button class="icon-btn" id="btn-theme-toggle" style="margin-left:auto" title="切换深色/浅色主题">◐ 主题</button>
+  <button class="icon-btn repo-btn" id="btn-open-repo" title="打开 GitHub 仓库（源码、协议文档、发布记录）">GitHub 仓库</button>
   <button class="primary" id="btn-verify-all" title="全渠道串行重探每个模型的可用性，仅保留可调用者">统一验证可调用性</button>
   <span id="verify-all-status" class="muted" style="font-size:12px"></span>
   <span id="server-pill" class="pill off">服务未启动</span>
@@ -608,7 +612,7 @@
   </div>
 
   <div class="footer">
-    <b>诚实交代</b><br>
+    <b>诚实交代</b> · <span style="font-family:var(--mono)">CreditFerry <span id="footer-version">v—</span> · <span id="footer-repo" style="user-select:all;cursor:text">https://github.com/Litre-WU/credit-ferry</span></span><br>
     ① 本工具调用你在 Loomy / 小浣熊 上的积分额度，请遵守对应平台的服务条款；积分权益由上游发放与回收，本工具不做任何代领、代扣或破解。<br>
     ② 所有凭据（会话、令牌）仅存本机数据目录（%APPDATA%\CreditFerry），不明文外传；转发口只听 127.0.0.1，浏览器来源一律拒绝。<br>
     ③ 退出本工具会把自己写入 WorkBuddy models.json 的条目摘除（你手写的配置不动）；小浣熊的扫码令牌轮换后会自动续期，失败需重新扫码。<br>
