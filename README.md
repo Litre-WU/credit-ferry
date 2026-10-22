@@ -102,3 +102,6 @@ cargo test                                    # Rust 单元测试（配置合并
 cargo check                                   # 类型检查
 ./node_modules/.bin/tauri build --no-bundle   # 只出 exe，不打安装包
 ```
+
+- **端口分离**：debug 构建 / `tauri dev` 默认监听 `6665`，release 安装包默认 `6666`（`store.rs::default_port()` 按 `cfg!(debug_assertions)` 区分；settings.json 里显式配置的 port 优先）。开发实例与生产实例可同时运行、互不抢端口。
+- 双实例并存时 debug 实例需加 `WEBVIEW2_USER_DATA_FOLDER=%LOCALAPPDATA%\CreditFerry-dev-webview` 隔离 WebView2 用户数据目录，否则与生产实例共用目录会报 `0x8007139F`。

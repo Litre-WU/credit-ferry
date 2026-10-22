@@ -40,7 +40,16 @@ pub struct Settings {
     pub auto_start_server: bool,
 }
 
-fn default_port() -> u16 { 6666 }
+/// 开发（`tauri dev` / debug 构建）用 6665，打包发布（release）用 6666——
+/// 正在跑的生产实例与开发实例互不抢端口（旧进程占端口直接退出的保护也
+/// 不会误杀）。settings.json 里显式写过 port 的用户设置仍然优先。
+fn default_port() -> u16 {
+    if cfg!(debug_assertions) {
+        6665
+    } else {
+        6666
+    }
+}
 fn default_true() -> bool { true }
 
 impl Default for Settings {
@@ -635,6 +644,17 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_builds_default_to_the_dev_port_and_release_to_prod() {
+        // Same assertion compiles differently per profile — that IS the
+        // contract: `tauri dev` must never fight the installed 6666 instance.
+        if cfg!(debug_assertions) {
+            assert_eq!(Settings::default().port, 6665);
+        } else {
+            assert_eq!(Settings::default().port, 6666);
+        }
+    }
 
     #[test]
     fn api_keys_ensure_primary_and_lifecycle() {
