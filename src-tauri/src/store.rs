@@ -15,7 +15,12 @@ pub const OWNER: &str = "credit-ferry-v1";
 
 /// The npm package / binary name of the isolated OpenCode runtime.
 pub const OPENCODE_PKG: &str = "opencode-ai";
+/// The tarball member differs per platform: the npm package carries
+/// `bin/opencode.exe` on Windows and `bin/opencode` everywhere else.
+#[cfg(windows)]
 pub const OPENCODE_BINARY: &str = "opencode.exe";
+#[cfg(not(windows))]
+pub const OPENCODE_BINARY: &str = "opencode";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {

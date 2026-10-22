@@ -2,7 +2,21 @@
 
 把 **Loomy（讯飞）**、**小浣熊（商汤）**、**OpenCode 免费模型池**、**华为码道 CodeArts Doer**、**Kilo 免费池**、**Zen/OpenCode 匿名车道** 等上游的模型，以本机 OpenAI 兼容口（`http://127.0.0.1:6666/v1`）摆渡给 **WorkBuddy / Qoder / DeepSeekHarness** 等客户端。Tauri 2（Rust + WebView）桌面应用，凭据只存本机。
 
-📦 **下载最新版**：[GitHub Releases](https://github.com/Litre-WU/credit-ferry/releases/latest)（NSIS `setup.exe` / MSI 两种安装包） · 仓库地址：`https://github.com/Litre-WU/credit-ferry`
+📦 **下载最新版**：[GitHub Releases](https://github.com/Litre-WU/credit-ferry/releases/latest) · 仓库地址：`https://github.com/Litre-WU/credit-ferry`
+
+| 平台 | 安装包 | 说明 |
+|---|---|---|
+| Windows | `CreditFerry_<ver>_x64-setup.exe`（NSIS） / `CreditFerry_<ver>_x64_zh-CN.msi` | 完整功能，含华为码道凭据导入（DPAPI） |
+| macOS | `CreditFerry_<ver>_aarch64.dmg` / `CreditFerry_<ver>_x64.dmg`（Intel） | 未代码签名，见下方 Gatekeeper 说明；OpenCode 免费池可用 |
+
+**macOS Gatekeeper 提示**：本仓库暂无 Apple Developer 证书，`.dmg` 未签名也未公证，首次打开会被提示「已损坏」或「无法验证开发者」。这不是安装包损坏，解除隔离后即可正常使用：
+
+```bash
+# 把 CreditFerry.app 拖进「应用程序」后执行（按实际路径调整）
+xattr -dr com.apple.quarantine /Applications/CreditFerry.app
+```
+
+macOS 上的能力差异：华为码道的登录态导入依赖 Windows DPAPI，暂不可用（面板内会显示该渠道未登录）；Loomy / 小浣熊 / OpenCode / Kilo / Zen 等其余渠道均正常。数据目录为 `~/Library/Application Support/local.credit.ferry`。
 
 ![sources](https://img.shields.io/badge/sources-13%20upstreams-2563eb) ![tests](https://img.shields.io/badge/tests-91%20passed-047857) ![version](https://img.shields.io/badge/version-0.1.11-f59e0b)
 

@@ -998,7 +998,11 @@ mod tests {
     #[test]
     #[ignore]
     fn export_all_clients_once() {
-        let dir = std::path::PathBuf::from(std::env::var("APPDATA").unwrap()).join("CreditFerry");
+        // APPDATA on Windows, ~/.credit-ferry elsewhere (macOS/Linux harness).
+        let dir = std::env::var("APPDATA")
+            .map(|a| std::path::PathBuf::from(a).join("CreditFerry"))
+            .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".credit-ferry")))
+            .unwrap();
         let store = Store::open(dir.clone());
         let key = store.load_or_create_api_key();
         let endpoint = format!("http://127.0.0.1:{}/v1", store.settings.port);

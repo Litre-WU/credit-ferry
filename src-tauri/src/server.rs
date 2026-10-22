@@ -218,11 +218,19 @@ async fn request_log(
         .to_string();
     let res = next.run(req).await;
     let status = res.status().as_u16();
-    if let Ok(appdata) = std::env::var("APPDATA") {
+    // Access log location: %APPDATA%\CreditFerry\access.log on Windows,
+    // ~/.credit-ferry/access.log elsewhere. Skipped when neither resolves.
+    let log_dir = std::env::var("APPDATA")
+        .map(|a| std::path::Path::new(&a).join("CreditFerry"))
+        .ok()
+        .or_else(|| {
+            std::env::var("HOME")
+                .map(|h| std::path::Path::new(&h).join(".credit-ferry"))
+                .ok()
+        });
+    if let Some(dir) = log_dir {
         use std::io::Write;
-        let p = std::path::Path::new(&appdata)
-            .join("CreditFerry")
-            .join("access.log");
+        let p = dir.join("access.log");
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
             let _ = writeln!(
                 f,

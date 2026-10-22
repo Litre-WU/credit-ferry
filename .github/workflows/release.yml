@@ -4,7 +4,10 @@ on:
   push:
     tags:
       - "v*"
-  # allow a manual run from Actions UI (no tag needed); publish only happens on tags
+  # Manual runs from the Actions UI. When re-running for an EXISTING tag
+  # (e.g. adding macOS bundles to a release created via the API, which never
+  # emits a push event), pick `refs/tags/vX.Y.Z` in the branch dropdown —
+  # the publish job below keys off the ref, not the event name.
   workflow_dispatch:
 
 permissions:
@@ -117,7 +120,9 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # Key off the ref, not the event: a manual run pointed at refs/tags/v*
+    # must publish just like a tag push does (API-created tags emit no push).
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts

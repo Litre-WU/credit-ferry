@@ -101,6 +101,7 @@ pub fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
 /// ("不支持的 16 位应用程序") — and the npm tarball's `bin/opencode.exe` is
 /// exactly that: a JS stub. Probe the header before ever executing a
 /// candidate; text stubs are rejected silently.
+#[cfg(windows)]
 fn looks_executable(file: &Path) -> bool {
     match std::fs::File::open(file) {
         Ok(mut f) => {
@@ -109,6 +110,14 @@ fn looks_executable(file: &Path) -> bool {
         }
         Err(_) => false,
     }
+}
+
+#[cfg(not(windows))]
+fn looks_executable(file: &Path) -> bool {
+    // Mach-O / ELF have no `MZ` header, so the Windows gate cannot be reused
+    // here. `version_of` still runs the candidate and only trusts a well-formed
+    // version string, so a shell shim fails harmlessly.
+    file.is_file()
 }
 
 fn version_of(file: &Path) -> Option<String> {
