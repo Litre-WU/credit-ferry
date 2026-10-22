@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Drive the CreditFerry panel over CDP: invoke Tauri commands from the webview."""
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
 import websocket  # websocket-client
 
-CDP_LIST = "http://127.0.0.1:9222/json"
+# 面板侧用 CREDITFERRY_CDP_PORT 指定端口（9222 常被本机其它 Chromium 占用），两边读同一个变量。
+CDP_PORT = os.environ.get("CREDITFERRY_CDP_PORT", "9222")
+CDP_LIST = "http://127.0.0.1:%s/json" % CDP_PORT
 
 def find_page():
     with urllib.request.urlopen(CDP_LIST, timeout=5) as r:
