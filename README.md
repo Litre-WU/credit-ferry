@@ -59,7 +59,7 @@ npm run dev
 
 ## 安全设计
 
-- **转发口只听 127.0.0.1**：Bearer 密钥常量时间比较；任何带 `Origin` 头的请求 403；请求体 8 MB 上限；并发上限 4。
+- **转发口只听 127.0.0.1**：Bearer 密钥常量时间比较；Origin 围栏只拦**非回环的 http(s) 网页**（挡公网页面 CSRF），桌面 Electron 客户端的 `file://` / `app://` / `null` / 回环 Origin 一律放行并回 CORS 头（WorkBuddy「测试连接」等走渲染进程 fetch 才连得上）；请求体 8 MB 上限；并发上限 4。带 Origin 的请求会记 `%APPDATA%\CreditFerry\access.log` 便于排障。
 - **凭据不出本机**：Loomy 会话、小浣熊令牌、入口密钥全部落在 `%APPDATA%\CreditFerry\`，不明文外传；小浣熊 refresh token 单次轮换、过期前自动续期。
 - **OpenCode 隔离运行时**：托管二进制（sha512 校验下载）、环境变量白名单、四个 XDG 目录重定向、随机 Basic 口令、自动更新/分享/项目配置/外部技能全关。
 - **信封协议 + 审批围栏**：OpenCode 侧模型只能以 JSON 信封「提议」动作（schema 由本次请求工具表焊死），本机动作一律自动拒绝，执行权始终在客户端。

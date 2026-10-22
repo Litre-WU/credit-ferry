@@ -173,10 +173,103 @@ fn guard(headers: &HeaderMap, state: &AppState) -> Option<Response> {
     if !(ok_main || ok_extra) {
         return Some(json_error(StatusCode::UNAUTHORIZED, "Local proxy API key required"));
     }
-    if headers.contains_key("origin") {
+    let allowed = origin_allowed(headers);
+    // Diagnostic trail: only requests that carry an `Origin` are logged (the
+    // desktop-client / browser case). Lets us see exactly what a client like
+    // WorkBuddy sends when it reports "无法连接到模型服务".
+    if let Some(o) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            use std::io::Write;
+            let p = std::path::Path::new(&appdata)
+                .join("CreditFerry")
+                .join("access.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+                let _ = writeln!(
+                    f,
+                    "{} origin={} allowed={} ua={}",
+                    chrono::Local::now(),
+                    o,
+                    allowed,
+                    headers
+                        .get("user-agent")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("-")
+                );
+            }
+        }
+    }
+    if !allowed {
         return Some(json_error(StatusCode::FORBIDDEN, "Browser-origin requests are disabled"));
     }
     None
+}
+
+/// Origin fence, desktop-aware. Native clients (curl, Node main process)
+/// send no `Origin` at all — allowed. Desktop Electron apps (WorkBuddy's
+/// "test connection" runs in a renderer) always attach one, but its scheme
+/// is a *local* one: `file://`, `app://`, `null`, or a loopback `http(s)`.
+/// The server binds 127.0.0.1 only, so any process that can reach it is
+/// already on this machine; the fence's real job is to reject a *public web
+/// page* (an `http(s)` origin that is not loopback) driving the proxy — the
+/// CSRF-style case. So: reject only `http(s)` origins whose host is not
+/// loopback; everything else (no origin, null, file/app/data/blob, localhost)
+/// passes.
+fn origin_allowed(headers: &HeaderMap) -> bool {
+    let o = match headers.get("origin").and_then(|v| v.to_str().ok()) {
+        Some(s) => s,
+        None => return true,
+    };
+    if o == "null" {
+        return true;
+    }
+    // Only an http/https origin can be a remote web page; any other scheme
+    // (file://, app://, …) is a local desktop renderer — allow it.
+    let rest = match o
+        .strip_prefix("http://")
+        .or_else(|| o.strip_prefix("https://"))
+    {
+        Some(r) => r,
+        None => return true,
+    };
+    let host = rest.split(|c| c == ':' || c == '/').next().unwrap_or("");
+    matches!(host, "127.0.0.1" | "[::1]" | "localhost")
+}
+
+/// CORS for the loopback-origin case: a renderer fetch is cross-origin from
+/// `http://127.0.0.1:6666`, so preflight (OPTIONS) and response headers are
+/// required or Chromium blocks the call before it even reaches the fence.
+/// Non-loopback origins get no CORS headers and still hit the 403 in `guard`.
+async fn cors(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let local = origin_allowed(req.headers());
+    if *req.method() == axum::http::Method::OPTIONS {
+        if !local {
+            return json_error(StatusCode::FORBIDDEN, "Browser-origin requests are disabled");
+        }
+        let acao = origin.clone().unwrap_or_else(|| "*".into());
+        return (
+            [
+                ("Access-Control-Allow-Origin", acao),
+                ("Access-Control-Allow-Methods", "GET, POST, OPTIONS".into()),
+                ("Access-Control-Allow-Headers", "Authorization, Content-Type".into()),
+                ("Access-Control-Max-Age", "600".into()),
+            ],
+        )
+            .into_response();
+    }
+    let mut res = next.run(req).await;
+    if local {
+        if let Some(o) = origin {
+            if let Ok(v) = axum::http::HeaderValue::from_str(&o) {
+                res.headers_mut().insert("Access-Control-Allow-Origin", v);
+            }
+        }
+    }
+    res
 }
 
 /// Client-visible model id, e.g. `Loomy · Spark X2.5`.
@@ -299,9 +392,16 @@ pub async fn resolve_model(state: &AppState, requested: &str) -> Option<ModelEnt
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
-        .route("/v1/models", get(models))
-        .route("/v1/chat/completions", post(chat))
+        .route("/v1/models", get(models).options(preflight))
+        .route("/v1/chat/completions", post(chat).options(preflight))
+        .layer(axum::middleware::from_fn(cors))
         .with_state(state)
+}
+
+async fn preflight() -> Response {
+    // The cors middleware answers OPTIONS before this ever runs; kept as a
+    // belt-and-braces 204 for any route added without the middleware.
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn health(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -1342,6 +1442,31 @@ pub async fn idle() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hdrs(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                axum::http::header::HeaderName::from_lowercase(k.as_bytes()).unwrap(),
+                axum::http::HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn origin_fence_blocks_only_remote_web_pages() {
+        // No Origin (native client) and local desktop renderers pass.
+        assert!(origin_allowed(&hdrs(&[])));
+        assert!(origin_allowed(&hdrs(&[("origin", "file://")])));
+        assert!(origin_allowed(&hdrs(&[("origin", "app://.")])));
+        assert!(origin_allowed(&hdrs(&[("origin", "null")])));
+        assert!(origin_allowed(&hdrs(&[("origin", "http://localhost:3000")])));
+        assert!(origin_allowed(&hdrs(&[("origin", "http://127.0.0.1:5173")])));
+        // A public web page is the CSRF case and stays blocked.
+        assert!(!origin_allowed(&hdrs(&[("origin", "https://evil.example.com")])));
+        assert!(!origin_allowed(&hdrs(&[("origin", "http://10.0.0.5:8080")])));
+    }
 
     #[test]
     fn clamp_lowers_only_what_the_upstream_would_reject() {
