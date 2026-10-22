@@ -1,8 +1,10 @@
 # CreditFerry 积分摆渡
 
-把 **Loomy（讯飞）**、**小浣熊（商汤）**、**OpenCode 免费模型池**、**华为码道 CodeArts Doer**、**Kilo 免费池**、**Zen/OpenCode 匿名车道** 六个来源的模型，以本机 OpenAI 兼容口（`http://127.0.0.1:6666/v1`）摆渡给 **WorkBuddy / Qoder / DeepSeekHarness** 等客户端。Tauri 2（Rust + WebView）桌面应用，凭据只存本机。
+把 **Loomy（讯飞）**、**小浣熊（商汤）**、**OpenCode 免费模型池**、**华为码道 CodeArts Doer**、**Kilo 免费池**、**Zen/OpenCode 匿名车道** 等上游的模型，以本机 OpenAI 兼容口（`http://127.0.0.1:6666/v1`）摆渡给 **WorkBuddy / Qoder / DeepSeekHarness** 等客户端。Tauri 2（Rust + WebView）桌面应用，凭据只存本机。
 
-![sources](https://img.shields.io/badge/sources-6%20upstreams-2563eb) ![tests](https://img.shields.io/badge/tests-41%20passed-047857)
+📦 **下载最新版**：[GitHub Releases](https://github.com/Litre-WU/credit-ferry/releases/latest)（NSIS `setup.exe` / MSI 两种安装包） · 仓库地址：`https://github.com/Litre-WU/credit-ferry`
+
+![sources](https://img.shields.io/badge/sources-13%20upstreams-2563eb) ![tests](https://img.shields.io/badge/tests-91%20passed-047857) ![version](https://img.shields.io/badge/version-0.1.11-f59e0b)
 
 ## 它能做什么
 
