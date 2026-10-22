@@ -108,8 +108,11 @@
           st = '<span class="badge no" title="尚未验证，点顶部「统一验证可调用性」">未验证</span>';
         }
         var disp = m.name || m.clientId;
+        // 复制的是完整客户端 id（如 `Loomy · DeepSeek V4.1 Flash`）——转发口
+        // resolve_model 只认这个或上游原始 id；纯显示名（无渠道前缀）粘进
+        // WorkBuddy 会 400「无法连接到模型服务」，故 data 用 clientId。
         return '<tr><td><b>' + esc(disp) + '</b> ' +
-          '<button class="copy-btn" data-copy-model="' + esc(disp) + '" title="复制模型名称">复制</button></td>'
+          '<button class="copy-btn" data-copy-model="' + esc(m.clientId) + '" title="复制完整模型 id（接入客户端用这个）">复制</button></td>'
           + '<td>' + sourceBadge(m.source) + '</td>'
           + '<td class="muted" style="font-size:12px">' + esc(m.clientId) + '</td>'
           + '<td>' + (m.vision ? '<span class="badge ok">✓</span>' : '<span class="badge no">—</span>') + '</td>'
@@ -852,7 +855,7 @@
     if (mtable) mtable.addEventListener('click', function (ev) {
       var btn = ev.target.closest('[data-copy-model]');
       if (!btn) return;
-      copyText(btn.getAttribute('data-copy-model'), '模型名称已复制');
+      copyText(btn.getAttribute('data-copy-model'), '模型 id 已复制（可直接粘进客户端）');
     });
   })();
 

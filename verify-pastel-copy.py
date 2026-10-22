@@ -45,7 +45,7 @@ check("复制按钮已渲染", n and n >= 1, n)
 
 # 点击第一行复制按钮，读剪贴板（webview 可能无权限，改测 toast 出现 + 按钮属性）
 first_name = cdp.evaluate(ws, "document.querySelector('#models-table [data-copy-model]').getAttribute('data-copy-model')")
-check("复制按钮带模型名", bool(first_name), first_name)
+check("复制按钮带完整客户端id(渠道前缀)", bool(first_name) and " · " in first_name, first_name)
 cdp.evaluate(ws, "document.querySelector('#models-table [data-copy-model]').click()")
 toast = ""
 toast_show = False
