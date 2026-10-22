@@ -173,35 +173,71 @@ fn guard(headers: &HeaderMap, state: &AppState) -> Option<Response> {
     if !(ok_main || ok_extra) {
         return Some(json_error(StatusCode::UNAUTHORIZED, "Local proxy API key required"));
     }
-    let allowed = origin_allowed(headers);
-    // Diagnostic trail: only requests that carry an `Origin` are logged (the
-    // desktop-client / browser case). Lets us see exactly what a client like
-    // WorkBuddy sends when it reports "无法连接到模型服务".
-    if let Some(o) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            use std::io::Write;
-            let p = std::path::Path::new(&appdata)
-                .join("CreditFerry")
-                .join("access.log");
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
-                let _ = writeln!(
-                    f,
-                    "{} origin={} allowed={} ua={}",
-                    chrono::Local::now(),
-                    o,
-                    allowed,
-                    headers
-                        .get("user-agent")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("-")
-                );
-            }
-        }
-    }
-    if !allowed {
+    if !origin_allowed(headers) {
         return Some(json_error(StatusCode::FORBIDDEN, "Browser-origin requests are disabled"));
     }
     None
+}
+
+/// Outermost diagnostic middleware: log EVERY request that actually reaches
+/// the ferry (method, path, status, whether an Authorization header was
+/// present, Origin, UA) to `%APPDATA%\CreditFerry\access.log`. If a client
+/// reports "cannot connect" but nothing shows up here, the request never
+/// reached 127.0.0.1:6666 at all — the usual culprit is a system/HTTP proxy
+/// intercepting loopback traffic.
+/// Bearer 头里密钥是否存在 + 前 8 位指纹（不可逆，仅用于区分"密钥错/没带/带对"）。
+fn auth_hint(headers: &HeaderMap) -> String {
+    match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        None => "none".into(),
+        Some(v) => {
+            let t = v.strip_prefix("Bearer ").unwrap_or(v);
+            let head: String = t.chars().take(8).collect();
+            format!("{}…(len={})", head, t.chars().count())
+        }
+    }
+}
+
+async fn request_log(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let auth = auth_hint(req.headers());
+    let origin = req
+        .headers()
+        .get("origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+    let ua = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+    let res = next.run(req).await;
+    let status = res.status().as_u16();
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        use std::io::Write;
+        let p = std::path::Path::new(&appdata)
+            .join("CreditFerry")
+            .join("access.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+            let _ = writeln!(
+                f,
+                "{} {} {} -> {} auth={} origin={} ua={}",
+                chrono::Local::now(),
+                method,
+                path,
+                status,
+                auth,
+                origin,
+                ua
+            );
+        }
+    }
+    res
 }
 
 /// Origin fence, desktop-aware. Native clients (curl, Node main process)
@@ -395,6 +431,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/models", get(models).options(preflight))
         .route("/v1/chat/completions", post(chat).options(preflight))
         .layer(axum::middleware::from_fn(cors))
+        // Registered last so it wraps everything (cors preflight included) —
+        // the outermost witness of "did the request even reach the ferry".
+        .layer(axum::middleware::from_fn(request_log))
         .with_state(state)
 }
 
